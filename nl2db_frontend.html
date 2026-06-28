@@ -1,0 +1,1031 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QueryMind</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+:root{
+  --ink:#1a1a1a;
+  --ink-soft:#2d2d2d;
+  --canvas:#fafaf8;
+  --surface:#f3f2ef;
+  --surface-card:#eceae5;
+  --dark:#18181a;
+  --dark-elevated:#242428;
+  --dark-prompt:#2e2e34;
+  --hairline:rgba(0,0,0,0.10);
+  --hairline-strong:#9a9898;
+  --body:#3d3d3a;
+  --mute:#6b6b67;
+  --ash:#9a9898;
+  --accent:#007aff;
+  --success:#30d158;
+  --danger:#ff3b30;
+  --warning:#ff9f0a;
+  --radius:4px;
+  --section:96px;
+  font-family:'JetBrains Mono',ui-monospace,'IBM Plex Mono',monospace;
+}
+
+body{background:var(--canvas);color:var(--ink);min-height:100vh;font-size:15px;line-height:1.6}
+
+/* NAV */
+nav{
+  position:sticky;top:0;z-index:100;
+  background:var(--canvas);
+  border-bottom:1px solid var(--hairline);
+  padding:0 32px;
+  height:52px;
+  display:flex;align-items:center;justify-content:space-between;
+}
+.wordmark{
+  font-weight:700;font-size:13px;letter-spacing:0.08em;
+  color:var(--ink);display:flex;align-items:center;gap:10px;
+}
+.wordmark-ascii{
+  font-size:10px;line-height:1.1;color:var(--ink);font-weight:700;white-space:pre;
+}
+.nav-links{display:flex;align-items:center;gap:6px}
+.nav-link{
+  font-size:13px;color:var(--mute);font-weight:500;
+  padding:4px 10px;border-radius:var(--radius);
+  background:none;border:none;cursor:pointer;
+  transition:color 0.15s,background 0.15s;
+  font-family:inherit;
+}
+.nav-link:hover{color:var(--ink);background:var(--surface)}
+.nav-link.active{color:var(--ink);background:var(--surface)}
+.nav-cta{
+  background:var(--ink);color:#fff;
+  font-size:13px;font-weight:500;font-family:inherit;
+  padding:5px 14px;border-radius:var(--radius);border:none;cursor:pointer;
+  transition:background 0.15s;
+}
+.nav-cta:hover{background:var(--ink-soft)}
+
+/* PAGES */
+.page{display:none;max-width:980px;margin:0 auto;padding:60px 32px 80px}
+.page.active{display:block}
+
+/* HERO */
+.hero{padding:80px 0 var(--section);border-bottom:1px solid var(--hairline)}
+.hero-eyebrow{
+  display:inline-flex;align-items:center;gap:8px;
+  font-size:12px;color:var(--mute);font-weight:500;letter-spacing:0.06em;
+  margin-bottom:20px;
+}
+.hero-eyebrow-dot{
+  width:6px;height:6px;border-radius:50%;background:var(--success);
+  animation:pulse 2s ease-in-out infinite;
+}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+h1{font-size:36px;font-weight:700;line-height:1.25;color:var(--ink);margin-bottom:18px;max-width:620px}
+h1 span{color:var(--mute)}
+.hero-sub{font-size:15px;color:var(--body);max-width:480px;margin-bottom:36px;line-height:1.7}
+.hero-actions{display:flex;gap:10px;align-items:center}
+.btn-primary{
+  background:var(--ink);color:#fff;font-family:inherit;font-size:14px;
+  font-weight:500;padding:8px 20px;border-radius:var(--radius);border:none;cursor:pointer;
+  transition:background 0.15s;
+}
+.btn-primary:hover{background:var(--ink-soft)}
+.btn-secondary{
+  background:var(--canvas);color:var(--ink);font-family:inherit;font-size:14px;
+  font-weight:500;padding:7px 20px;border-radius:var(--radius);
+  border:1px solid var(--hairline-strong);cursor:pointer;transition:background 0.15s;
+}
+.btn-secondary:hover{background:var(--surface)}
+
+/* TUI MOCKUP */
+.tui{
+  background:var(--dark);border-radius:0;margin-top:var(--section);
+  padding:40px 32px 32px;position:relative;overflow:hidden;
+}
+.tui::before{
+  content:'● ● ●';position:absolute;top:14px;left:20px;
+  font-size:11px;color:#555;letter-spacing:6px;
+}
+.tui-title{
+  text-align:center;font-size:11px;font-weight:700;letter-spacing:0.5em;
+  color:#fff;opacity:0.12;margin-bottom:28px;
+}
+.tui-prompt{
+  background:var(--dark-prompt);border-radius:var(--radius);
+  padding:10px 16px;display:flex;align-items:center;gap:12px;
+  margin-bottom:16px;
+}
+.tui-cursor{color:var(--accent);font-weight:700;font-size:14px}
+.tui-input-mock{
+  color:#e8e8e8;font-size:13px;font-weight:400;
+  flex:1;
+}
+.tui-hint{font-size:11px;color:var(--ash);opacity:0.6;margin-top:2px}
+.tui-output{margin-top:20px}
+.tui-row{
+  display:flex;gap:16px;padding:6px 0;
+  border-bottom:1px solid rgba(255,255,255,0.04);
+  font-size:12px;
+}
+.tui-row:last-child{border-bottom:none}
+.tui-col-key{color:#8b8bdb;min-width:140px;font-weight:500}
+.tui-col-val{color:#d0d0d0}
+.tui-status{
+  display:flex;align-items:center;gap:8px;margin-top:20px;
+  font-size:11px;color:var(--ash);opacity:0.7;
+  border-top:1px solid rgba(255,255,255,0.06);padding-top:12px;
+}
+.tui-status-ok{color:var(--success)}
+
+/* FEATURE ROWS */
+.section{padding:var(--section) 0;border-bottom:1px solid var(--hairline)}
+.section-label{font-size:13px;font-weight:700;color:var(--ink);margin-bottom:20px;letter-spacing:0.04em}
+.section-label::before{content:'[+] ';color:var(--mute)}
+.feature-list{display:flex;flex-direction:column;gap:0}
+.feature-row{
+  padding:14px 0;border-bottom:1px solid var(--hairline);
+  display:flex;gap:16px;align-items:flex-start;
+}
+.feature-row:last-child{border-bottom:none}
+.feature-marker{color:var(--mute);font-weight:700;font-size:13px;min-width:24px;margin-top:1px}
+.feature-content{}
+.feature-title{font-weight:700;font-size:14px;color:var(--ink);margin-bottom:3px}
+.feature-desc{font-size:13px;color:var(--body);line-height:1.6}
+
+/* CONNECT PAGE */
+.connect-form{max-width:580px}
+.form-group{margin-bottom:20px}
+label{display:block;font-size:13px;font-weight:500;color:var(--ink);margin-bottom:6px}
+label .label-hint{color:var(--mute);font-weight:400}
+input[type=text],input[type=password],select,textarea{
+  width:100%;background:var(--surface);color:var(--ink);
+  font-family:inherit;font-size:13px;
+  border:1px solid var(--hairline);border-radius:var(--radius);
+  padding:9px 12px;outline:none;transition:border-color 0.15s,background 0.15s;
+}
+input:focus,select:focus,textarea:focus{
+  background:var(--canvas);border-color:var(--ink);
+}
+.dialect-tabs{display:flex;gap:0;margin-bottom:4px;border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden}
+.dialect-tab{
+  flex:1;padding:7px 8px;font-family:inherit;font-size:12px;font-weight:500;
+  background:none;border:none;cursor:pointer;color:var(--mute);
+  transition:background 0.15s,color 0.15s;
+}
+.dialect-tab.active{background:var(--ink);color:#fff}
+.uri-preview{
+  margin-top:8px;background:var(--surface-card);
+  border-radius:var(--radius);padding:8px 12px;
+  font-size:12px;color:var(--mute);word-break:break-all;
+}
+.status-msg{
+  padding:10px 14px;border-radius:var(--radius);font-size:13px;margin-top:12px;
+}
+.status-msg.ok{background:rgba(48,209,88,0.1);color:#1a7a3a;border:1px solid rgba(48,209,88,0.2)}
+.status-msg.err{background:rgba(255,59,48,0.08);color:#cc2d22;border:1px solid rgba(255,59,48,0.2)}
+
+/* SAVED CONNECTIONS */
+.conn-list{margin-top:32px}
+.conn-item{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:12px 0;border-bottom:1px solid var(--hairline);
+}
+.conn-item:last-child{border-bottom:none}
+.conn-meta{}
+.conn-alias{font-size:14px;font-weight:700;color:var(--ink)}
+.conn-dialect{font-size:12px;color:var(--mute);margin-top:2px}
+.conn-actions{display:flex;gap:8px}
+.btn-sm{
+  font-family:inherit;font-size:12px;font-weight:500;padding:4px 12px;
+  border-radius:var(--radius);cursor:pointer;transition:all 0.15s;
+}
+.btn-sm-primary{background:var(--ink);color:#fff;border:none}
+.btn-sm-primary:hover{background:var(--ink-soft)}
+.btn-sm-ghost{background:none;color:var(--mute);border:1px solid var(--hairline)}
+.btn-sm-ghost:hover{color:var(--danger);border-color:var(--danger)}
+.btn-sm-active{background:var(--success);color:#fff;border:none}
+
+/* QUERY PAGE */
+.query-layout{display:grid;grid-template-columns:220px 1fr;gap:24px;align-items:start}
+.query-sidebar{}
+.sidebar-label{font-size:11px;font-weight:700;color:var(--mute);letter-spacing:0.08em;margin-bottom:8px}
+.active-conn{
+  background:var(--surface);border-radius:var(--radius);
+  padding:10px 12px;border:1px solid var(--hairline);margin-bottom:16px;
+}
+.active-conn-name{font-size:13px;font-weight:700;color:var(--ink)}
+.active-conn-dialect{font-size:11px;color:var(--mute)}
+.provider-section{margin-top:12px}
+.provider-row{display:flex;gap:6px;margin-top:6px}
+.provider-tab{
+  flex:1;font-family:inherit;font-size:11px;font-weight:500;padding:5px 4px;
+  border:1px solid var(--hairline);background:none;color:var(--mute);
+  border-radius:var(--radius);cursor:pointer;transition:all 0.15s;
+}
+.provider-tab.active{background:var(--ink);color:#fff;border-color:var(--ink)}
+.key-input-small{font-size:11px;margin-top:6px}
+
+/* CHAT */
+.chat-area{display:flex;flex-direction:column;gap:0}
+.chat-input-wrapper{
+  border:1px solid var(--hairline);border-radius:var(--radius);
+  background:var(--canvas);margin-bottom:16px;
+  transition:border-color 0.15s;
+}
+.chat-input-wrapper:focus-within{border-color:var(--ink)}
+.chat-input{
+  width:100%;resize:none;border:none;outline:none;background:none;
+  font-family:inherit;font-size:14px;color:var(--ink);
+  padding:12px 14px;min-height:80px;
+  border-bottom:1px solid var(--hairline);
+}
+.chat-input::placeholder{color:var(--ash)}
+.chat-footer{display:flex;justify-content:space-between;align-items:center;padding:8px 12px}
+.chat-hint{font-size:11px;color:var(--ash)}
+.chat-send{
+  background:var(--ink);color:#fff;font-family:inherit;font-size:12px;
+  font-weight:500;padding:6px 14px;border-radius:var(--radius);border:none;cursor:pointer;
+}
+.chat-send:hover{background:var(--ink-soft)}
+.chat-send:disabled{background:var(--surface-card);color:var(--ash);cursor:not-allowed}
+
+/* MESSAGES */
+.messages{display:flex;flex-direction:column;gap:16px}
+.msg{border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden}
+.msg-q{padding:12px 14px;background:var(--surface);font-size:13px;font-weight:500;color:var(--ink)}
+.msg-q::before{content:'> ';color:var(--mute)}
+.msg-body{padding:14px}
+.msg-sql{
+  background:var(--dark);border-radius:var(--radius);padding:12px 14px;
+  font-size:12px;color:#d0d0d0;margin-bottom:12px;white-space:pre-wrap;
+  line-height:1.6;
+}
+.msg-sql-label{font-size:10px;color:var(--ash);margin-bottom:8px;letter-spacing:0.06em;font-weight:700}
+.sql-keyword{color:#8b8bdb;font-weight:700}
+.msg-explanation{font-size:14px;color:var(--body);margin-bottom:12px;line-height:1.7}
+.msg-table-wrap{overflow-x:auto;margin-top:8px}
+.msg-table{width:100%;border-collapse:collapse;font-size:12px}
+.msg-table th{
+  text-align:left;padding:7px 10px;font-weight:700;color:var(--ink);
+  border-bottom:2px solid var(--hairline);background:var(--surface);font-size:11px;
+  letter-spacing:0.04em;
+}
+.msg-table td{padding:7px 10px;border-bottom:1px solid var(--hairline);color:var(--body)}
+.msg-table tr:last-child td{border-bottom:none}
+.msg-meta{display:flex;align-items:center;gap:12px;margin-top:10px;padding-top:10px;border-top:1px solid var(--hairline)}
+.msg-meta-item{font-size:11px;color:var(--mute)}
+.msg-meta-badge{
+  font-size:10px;font-weight:700;padding:2px 7px;border-radius:var(--radius);
+  letter-spacing:0.04em;
+}
+.badge-healed{background:rgba(255,159,10,0.1);color:#b36d00;border:1px solid rgba(255,159,10,0.2)}
+.badge-ok{background:rgba(48,209,88,0.1);color:#1a7a3a;border:1px solid rgba(48,209,88,0.2)}
+.badge-err{background:rgba(255,59,48,0.08);color:#cc2d22;border:1px solid rgba(255,59,48,0.2)}
+.msg-error{
+  background:rgba(255,59,48,0.06);border:1px solid rgba(255,59,48,0.15);
+  border-radius:var(--radius);padding:10px 12px;
+  font-size:13px;color:#cc2d22;
+}
+.healing-log{margin-top:8px;padding:8px 12px;background:var(--surface);border-radius:var(--radius)}
+.healing-log-label{font-size:10px;font-weight:700;color:var(--mute);letter-spacing:0.06em;margin-bottom:4px}
+.healing-entry{font-size:11px;color:var(--mute);padding:2px 0;border-bottom:1px solid var(--hairline)}
+.healing-entry:last-child{border-bottom:none}
+
+/* LOADING */
+.loading{display:flex;align-items:center;gap:8px;padding:16px;font-size:13px;color:var(--mute)}
+.spinner{
+  width:14px;height:14px;border:2px solid var(--hairline);
+  border-top-color:var(--ink);border-radius:50%;
+  animation:spin 0.7s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* EMPTY STATE */
+.empty{padding:40px 0;text-align:center}
+.empty-title{font-size:15px;font-weight:700;color:var(--ink);margin-bottom:6px}
+.empty-sub{font-size:13px;color:var(--mute)}
+.empty-ascii{font-size:24px;color:var(--surface-card);margin-bottom:12px;letter-spacing:4px}
+
+/* SECTION HEADER */
+.page-header{border-bottom:1px solid var(--hairline);padding-bottom:20px;margin-bottom:32px}
+.page-title{font-size:16px;font-weight:700;color:var(--ink)}
+.page-sub{font-size:13px;color:var(--mute);margin-top:4px}
+
+/* DIVIDER */
+.divider{border:none;border-top:1px solid var(--hairline);margin:var(--section) 0}
+
+/* TABS */
+.tab-strip{display:flex;border-bottom:2px solid var(--hairline);margin-bottom:28px}
+.tab{
+  padding:8px 16px;font-family:inherit;font-size:13px;font-weight:500;
+  color:var(--mute);background:none;border:none;cursor:pointer;
+  border-bottom:2px solid transparent;margin-bottom:-2px;transition:all 0.15s;
+}
+.tab.active{color:var(--ink);border-bottom-color:var(--ash)}
+.tab:hover:not(.active){color:var(--ink)}
+
+/* SESSION HISTORY */
+.session-row{
+  padding:14px 0;border-bottom:1px solid var(--hairline);
+  display:flex;align-items:center;justify-content:space-between;
+}
+.session-row:last-child{border-bottom:none}
+.session-meta{font-size:13px;color:var(--ink)}
+.session-count{font-size:12px;color:var(--mute);margin-top:2px}
+.session-action{font-size:12px;color:var(--accent);background:none;border:none;cursor:pointer;font-family:inherit}
+
+/* NOTIFY */
+.notify{
+  position:fixed;bottom:24px;right:24px;z-index:999;
+  background:var(--ink);color:#fff;font-family:'JetBrains Mono',monospace;
+  font-size:12px;padding:10px 18px;border-radius:var(--radius);
+  max-width:320px;opacity:0;transform:translateY(6px);
+  transition:all 0.2s;pointer-events:none;
+}
+.notify.show{opacity:1;transform:translateY(0)}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wordmark">
+    <pre class="wordmark-ascii">QM</pre>
+    <span style="font-size:13px;font-weight:700;letter-spacing:0.04em">QueryMind</span>
+  </div>
+  <div class="nav-links">
+    <button class="nav-link active" onclick="showPage('home')">home</button>
+    <button class="nav-link" onclick="showPage('connect')">connect db</button>
+    <button class="nav-link" onclick="showPage('query')">query</button>
+    <button class="nav-link" onclick="showPage('history')">history</button>
+  </div>
+  <button class="nav-cta" onclick="showPage('connect')">+ add database</button>
+</nav>
+
+<!-- HOME PAGE -->
+<div id="page-home" class="page active">
+  <div class="hero">
+    <div class="hero-eyebrow">
+      <span class="hero-eyebrow-dot"></span>
+      self-healing sql · multi-database · any llm
+    </div>
+    <h1>Talk to your database<br><span>in plain English.</span></h1>
+    <p class="hero-sub">Connect any MySQL, PostgreSQL, or SQLite database. Ask questions naturally. QueryMind writes the SQL, fixes its own mistakes, and explains the results.</p>
+    <div class="hero-actions">
+      <button class="btn-primary" onclick="showPage('connect')">connect a database →</button>
+      <button class="btn-secondary" onclick="showPage('query')">try a query</button>
+    </div>
+  </div>
+
+  <div class="tui">
+    <div class="tui-title">QUERYMIND  v0.1  ALPHA</div>
+    <div class="tui-prompt">
+      <span class="tui-cursor">›</span>
+      <span class="tui-input-mock" id="demo-input">show me total revenue by product category last quarter</span>
+      <span style="font-size:11px;color:var(--ash);opacity:0.5">⏎</span>
+    </div>
+    <div class="tui-output">
+      <div class="tui-row"><span class="tui-col-key" style="color:var(--accent)">SQL generated</span><span class="tui-col-val">SELECT category, SUM(amount) FROM orders…</span></div>
+      <div class="tui-row"><span class="tui-col-key" style="color:var(--warning)">retry [1/3]</span><span class="tui-col-val">relaxing date filter → LIKE → found 847 rows</span></div>
+      <div class="tui-row"><span class="tui-col-key" style="color:var(--success)">result</span><span class="tui-col-val">Electronics $124,500 · Apparel $98,200 · Home $67,800</span></div>
+    </div>
+    <div class="tui-status">
+      <span class="tui-status-ok">[ok]</span>
+      <span>2 self-heal retries · 1.2s · groq llama-3.3-70b</span>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">what it does</div>
+    <div class="feature-list">
+      <div class="feature-row">
+        <span class="feature-marker">[+]</span>
+        <div class="feature-content">
+          <div class="feature-title">Self-healing SQL</div>
+          <div class="feature-desc">When a query fails or returns nothing, the agent diagnoses the error — wrong column, too-strict filter, dialect mismatch — and retries autonomously up to 3 times before surfacing the issue.</div>
+        </div>
+      </div>
+      <div class="feature-row">
+        <span class="feature-marker">[+]</span>
+        <div class="feature-content">
+          <div class="feature-title">Multi-database, zero config</div>
+          <div class="feature-desc">Paste any MySQL, PostgreSQL, or SQLite connection string. QueryMind reads the live schema on first connect and routes SQL to the right dialect automatically.</div>
+        </div>
+      </div>
+      <div class="feature-row">
+        <span class="feature-marker">[+]</span>
+        <div class="feature-content">
+          <div class="feature-title">Bring your own key</div>
+          <div class="feature-desc">Use your own Groq or Gemini API key (both free tier) for unlimited queries. No key? Use the hosted fallback within the daily budget — displayed live so you always know where you stand.</div>
+        </div>
+      </div>
+      <div class="feature-row">
+        <span class="feature-marker">[+]</span>
+        <div class="feature-content">
+          <div class="feature-title">Conversation memory</div>
+          <div class="feature-desc">Ask follow-up questions naturally. "Now filter that by region" works because the last 5 turns stay in context for every query in a session.</div>
+        </div>
+      </div>
+      <div class="feature-row">
+        <span class="feature-marker">[x]</span>
+        <div class="feature-content">
+          <div class="feature-title">Read-only, always</div>
+          <div class="feature-desc">Every query is validated before execution. INSERT, UPDATE, DELETE, DROP — none of them will ever run. Your data is safe by design, not policy.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section" style="border-bottom:none">
+    <div class="section-label">coming next</div>
+    <div class="feature-list">
+      <div class="feature-row">
+        <span class="feature-marker">[-]</span>
+        <div class="feature-content">
+          <div class="feature-title">Schema memory</div>
+          <div class="feature-desc">First-connect exploration saved as a JSON sidecar. Subsequent sessions load it instantly — the agent knows your database, not just its tables.</div>
+        </div>
+      </div>
+      <div class="feature-row">
+        <span class="feature-marker">[-]</span>
+        <div class="feature-content">
+          <div class="feature-title">Query planner</div>
+          <div class="feature-desc">Compound questions broken into sub-queries, executed in order, results chained. "Worst category by growth and its top 3 customers" becomes two coordinated SQL calls.</div>
+        </div>
+      </div>
+      <div class="feature-row">
+        <span class="feature-marker">[-]</span>
+        <div class="feature-content">
+          <div class="feature-title">Chart agent</div>
+          <div class="feature-desc">After every query, a second agent decides whether to visualise the result, picks the right chart type, and renders it. No configuration required.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- CONNECT PAGE -->
+<div id="page-connect" class="page">
+  <div class="page-header">
+    <div class="page-title">connect a database</div>
+    <div class="page-sub">paste a connection string or fill in the fields. the connection is tested before saving.</div>
+  </div>
+
+  <div class="connect-form">
+    <div class="form-group">
+      <label>database type</label>
+      <div class="dialect-tabs">
+        <button class="dialect-tab active" onclick="setDialect('mysql',this)">MySQL</button>
+        <button class="dialect-tab" onclick="setDialect('postgresql',this)">PostgreSQL</button>
+        <button class="dialect-tab" onclick="setDialect('sqlite',this)">SQLite</button>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>alias <span class="label-hint">— a name you'll recognise</span></label>
+      <input type="text" id="conn-alias" placeholder="prod-postgres" oninput="updateUri()">
+    </div>
+
+    <div id="conn-fields-mysql" class="conn-fields">
+      <div class="form-group">
+        <label>host</label>
+        <input type="text" id="mysql-host" placeholder="localhost" oninput="updateUri()">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group">
+          <label>user</label>
+          <input type="text" id="mysql-user" placeholder="root" oninput="updateUri()">
+        </div>
+        <div class="form-group">
+          <label>password</label>
+          <input type="password" id="mysql-pass" placeholder="••••••" oninput="updateUri()">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>database name</label>
+        <input type="text" id="mysql-db" placeholder="my_database" oninput="updateUri()">
+      </div>
+    </div>
+
+    <div id="conn-fields-postgresql" class="conn-fields" style="display:none">
+      <div class="form-group">
+        <label>host</label>
+        <input type="text" id="pg-host" placeholder="localhost" oninput="updateUri()">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group">
+          <label>user</label>
+          <input type="text" id="pg-user" placeholder="postgres" oninput="updateUri()">
+        </div>
+        <div class="form-group">
+          <label>password</label>
+          <input type="password" id="pg-pass" placeholder="••••••" oninput="updateUri()">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>database name</label>
+        <input type="text" id="pg-db" placeholder="my_database" oninput="updateUri()">
+      </div>
+    </div>
+
+    <div id="conn-fields-sqlite" class="conn-fields" style="display:none">
+      <div class="form-group">
+        <label>file path <span class="label-hint">— absolute path on the server</span></label>
+        <input type="text" id="sqlite-path" placeholder="/data/mydb.db" oninput="updateUri()">
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>connection URI <span class="label-hint">— or paste directly</span></label>
+      <input type="text" id="conn-uri" placeholder="mysql+pymysql://user:pass@host/db" oninput="uriEdited=true">
+      <div class="uri-preview" id="uri-preview" style="display:none"></div>
+    </div>
+
+    <div id="conn-status"></div>
+
+    <div style="display:flex;gap:10px;margin-top:8px">
+      <button class="btn-primary" onclick="testConnection()">test connection</button>
+      <button class="btn-secondary" onclick="saveConnection()">save</button>
+    </div>
+  </div>
+
+  <div class="conn-list" id="conn-list">
+    <div class="section-label" style="margin-bottom:16px">saved connections</div>
+    <div id="conn-items">
+      <div class="empty">
+        <div class="empty-ascii">[~]</div>
+        <div class="empty-title">no connections yet</div>
+        <div class="empty-sub">fill in the form above to add your first database</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- QUERY PAGE -->
+<div id="page-query" class="page">
+  <div class="query-layout">
+    <div class="query-sidebar">
+      <div class="sidebar-label">active connection</div>
+      <div class="active-conn" id="sidebar-conn">
+        <div class="active-conn-name" id="sidebar-conn-name">none selected</div>
+        <div class="active-conn-dialect" id="sidebar-conn-dialect">choose from connect page</div>
+      </div>
+      <button class="btn-sm btn-sm-ghost" style="width:100%;font-size:12px;padding:6px" onclick="showPage('connect')">change database</button>
+
+      <div class="provider-section">
+        <div class="sidebar-label" style="margin-top:16px">llm provider</div>
+        <div class="provider-row">
+          <button class="provider-tab active" onclick="setProvider('groq',this)">Groq</button>
+          <button class="provider-tab" onclick="setProvider('gemini',this)">Gemini</button>
+        </div>
+        <input type="password" id="provider-key" class="key-input-small" placeholder="your api key (optional)" style="margin-top:8px;font-size:11px">
+        <div style="margin-top:6px;font-size:11px;color:var(--mute)">no key → uses hosted budget</div>
+
+        <div id="budget-display" style="margin-top:10px;padding:8px 10px;background:var(--surface);border-radius:var(--radius)">
+          <div style="font-size:10px;font-weight:700;color:var(--mute);letter-spacing:0.06em;margin-bottom:4px">HOSTED BUDGET</div>
+          <div id="budget-bar-wrap" style="background:var(--surface-card);border-radius:2px;height:4px;margin-bottom:4px">
+            <div id="budget-bar" style="height:4px;background:var(--success);border-radius:2px;width:100%;transition:width 0.4s"></div>
+          </div>
+          <div id="budget-text" style="font-size:11px;color:var(--mute)">loading…</div>
+        </div>
+
+        <div style="margin-top:12px">
+          <button class="btn-sm btn-sm-ghost" style="width:100%;font-size:11px" onclick="clearSession()">clear conversation [x]</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="min-width:0">
+      <div class="chat-input-wrapper">
+        <textarea class="chat-input" id="chat-input" placeholder="ask anything about your database…&#10;e.g. &quot;show me total sales by month this year&quot;" onkeydown="handleKey(event)"></textarea>
+        <div class="chat-footer">
+          <span class="chat-hint">shift+enter for new line · enter to send</span>
+          <button class="chat-send" id="chat-send" onclick="sendQuery()">send →</button>
+        </div>
+      </div>
+
+      <div class="messages" id="messages">
+        <div class="empty" style="padding:60px 0">
+          <div class="empty-ascii">[_]</div>
+          <div class="empty-title">ready to query</div>
+          <div class="empty-sub">connect a database and ask your first question</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- HISTORY PAGE -->
+<div id="page-history" class="page">
+  <div class="page-header">
+    <div class="page-title">session history</div>
+    <div class="page-sub">past conversations across all connected databases</div>
+  </div>
+  <div id="history-content">
+    <div class="empty">
+      <div class="empty-ascii">[~]</div>
+      <div class="empty-title">no sessions yet</div>
+      <div class="empty-sub">your query sessions will appear here</div>
+    </div>
+  </div>
+</div>
+
+<div class="notify" id="notify"></div>
+
+<script>
+const API = 'http://localhost:8000';
+let activeConnection = null;
+let currentProvider = 'groq';
+let uriEdited = false;
+let currentDialect = 'mysql';
+let savedConnections = [];
+let isQuerying = false;
+
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  const links = document.querySelectorAll('.nav-link');
+  links.forEach(l => { if(l.textContent.trim() === name || (name==='connect' && l.textContent.includes('connect'))) l.classList.add('active'); });
+  if(name === 'query') { fetchBudget(); }
+  if(name === 'history') { fetchHistory(); }
+  if(name === 'connect') { renderConnections(); }
+}
+
+function notify(msg, type='info') {
+  const el = document.getElementById('notify');
+  el.textContent = msg;
+  el.style.background = type === 'err' ? '#cc2d22' : type === 'ok' ? '#1a7a3a' : 'var(--ink)';
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+function setDialect(d, btn) {
+  currentDialect = d;
+  document.querySelectorAll('.dialect-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('.conn-fields').forEach(f => f.style.display = 'none');
+  const el = document.getElementById('conn-fields-' + d);
+  if(el) el.style.display = 'block';
+  uriEdited = false;
+  updateUri();
+}
+
+function updateUri() {
+  if(uriEdited) return;
+  const d = currentDialect;
+  let uri = '';
+  if(d === 'mysql') {
+    const h = document.getElementById('mysql-host').value || 'localhost';
+    const u = document.getElementById('mysql-user').value || '';
+    const p = document.getElementById('mysql-pass').value || '';
+    const db = document.getElementById('mysql-db').value || '';
+    uri = `mysql+pymysql://${u}:${p}@${h}/${db}`;
+  } else if(d === 'postgresql') {
+    const h = document.getElementById('pg-host').value || 'localhost';
+    const u = document.getElementById('pg-user').value || '';
+    const p = document.getElementById('pg-pass').value || '';
+    const db = document.getElementById('pg-db').value || '';
+    uri = `postgresql://${u}:${p}@${h}/${db}`;
+  } else if(d === 'sqlite') {
+    const path = document.getElementById('sqlite-path').value || '';
+    uri = `sqlite:///${path}`;
+  }
+  document.getElementById('conn-uri').value = uri;
+  const prev = document.getElementById('uri-preview');
+  if(uri.length > 10) { prev.style.display = 'block'; prev.textContent = uri; }
+  else { prev.style.display = 'none'; }
+}
+
+async function testConnection() {
+  const alias = document.getElementById('conn-alias').value.trim() || 'unnamed';
+  const uri = document.getElementById('conn-uri').value.trim();
+  if(!uri) { showStatus('enter a connection uri first', 'err'); return; }
+  showStatus('testing connection…', '');
+  try {
+    const r = await fetch(API + '/connections', {
+      method:'POST', credentials:'include',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({alias, uri, test_only: true})
+    });
+    if(r.ok) { showStatus('[+] connection successful', 'ok'); }
+    else { const d = await r.json(); showStatus('[-] ' + (d.error || 'connection failed'), 'err'); }
+  } catch(e) {
+    showStatus('[+] backend not running — connection form is live for demo', 'ok');
+  }
+}
+
+async function saveConnection() {
+  const alias = document.getElementById('conn-alias').value.trim();
+  const uri = document.getElementById('conn-uri').value.trim();
+  if(!alias || !uri) { showStatus('alias and uri are required', 'err'); return; }
+
+  const conn = {id: Date.now(), alias, uri, dialect: currentDialect};
+  savedConnections.push(conn);
+  renderConnections();
+  showStatus('[+] "' + alias + '" saved', 'ok');
+  notify('Connection saved: ' + alias, 'ok');
+}
+
+function showStatus(msg, type) {
+  const el = document.getElementById('conn-status');
+  el.innerHTML = `<div class="status-msg ${type==='ok'?'ok':type==='err'?'err':''}">${msg}</div>`;
+}
+
+function renderConnections() {
+  const el = document.getElementById('conn-items');
+  if(!savedConnections.length) {
+    el.innerHTML = `<div class="empty"><div class="empty-ascii">[~]</div><div class="empty-title">no connections yet</div><div class="empty-sub">fill in the form above to add your first database</div></div>`;
+    return;
+  }
+  el.innerHTML = savedConnections.map((c,i) => `
+    <div class="conn-item">
+      <div class="conn-meta">
+        <div class="conn-alias">${c.alias}</div>
+        <div class="conn-dialect">${c.dialect} · ${maskUri(c.uri)}</div>
+      </div>
+      <div class="conn-actions">
+        <button class="btn-sm ${activeConnection && activeConnection.id===c.id ? 'btn-sm-active':'btn-sm-primary'}"
+          onclick="activateConnection(${i})">${activeConnection && activeConnection.id===c.id ? 'active':'use this'}</button>
+        <button class="btn-sm btn-sm-ghost" onclick="removeConnection(${i})">remove</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function maskUri(uri) {
+  return uri.replace(/:([^@:\/]+)@/, ':***@').substring(0,50) + '…';
+}
+
+function activateConnection(i) {
+  activeConnection = savedConnections[i];
+  document.getElementById('sidebar-conn-name').textContent = activeConnection.alias;
+  document.getElementById('sidebar-conn-dialect').textContent = activeConnection.dialect;
+  renderConnections();
+  notify('Active: ' + activeConnection.alias, 'ok');
+  showPage('query');
+}
+
+function removeConnection(i) {
+  const c = savedConnections[i];
+  if(activeConnection && activeConnection.id === c.id) activeConnection = null;
+  savedConnections.splice(i, 1);
+  renderConnections();
+}
+
+function setProvider(p, btn) {
+  currentProvider = p;
+  document.querySelectorAll('.provider-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+async function fetchBudget() {
+  try {
+    const r = await fetch(API + '/budget', {credentials:'include'});
+    if(r.ok) {
+      const d = await r.json();
+      const pct = Math.max(0, Math.round((d.remaining / d.budget) * 100));
+      document.getElementById('budget-bar').style.width = pct + '%';
+      document.getElementById('budget-bar').style.background = pct > 50 ? 'var(--success)' : pct > 20 ? 'var(--warning)' : 'var(--danger)';
+      document.getElementById('budget-text').textContent = d.remaining.toLocaleString() + ' / ' + d.budget.toLocaleString() + ' tokens remaining';
+    }
+  } catch(e) {
+    document.getElementById('budget-text').textContent = 'backend offline';
+  }
+}
+
+function handleKey(e) {
+  if(e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendQuery(); }
+}
+
+async function sendQuery() {
+  if(isQuerying) return;
+  const input = document.getElementById('chat-input');
+  const question = input.value.trim();
+  if(!question) return;
+  if(!activeConnection) { notify('select a database connection first', 'err'); showPage('connect'); return; }
+
+  isQuerying = true;
+  const btn = document.getElementById('chat-send');
+  btn.disabled = true;
+  input.value = '';
+
+  const msgEl = appendMessage(question, null);
+  const messages = document.getElementById('messages');
+  const empties = messages.querySelectorAll('.empty');
+  empties.forEach(e => e.remove());
+
+  const apiKey = document.getElementById('provider-key').value.trim() || null;
+
+  try {
+    const r = await fetch(API + '/query', {
+      method:'POST', credentials:'include',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        question,
+        uri: activeConnection.uri,
+        api_key: apiKey,
+        provider: currentProvider,
+      })
+    });
+    const d = await r.json();
+    renderResponse(msgEl, d, question);
+    await fetchBudget();
+  } catch(e) {
+    renderDemoResponse(msgEl, question);
+  }
+
+  isQuerying = false;
+  btn.disabled = false;
+}
+
+function appendMessage(question, _) {
+  const messages = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'msg';
+  div.innerHTML = `
+    <div class="msg-q">${escHtml(question)}</div>
+    <div class="msg-body">
+      <div class="loading"><div class="spinner"></div> generating SQL…</div>
+    </div>
+  `;
+  messages.appendChild(div);
+  div.scrollIntoView({behavior:'smooth', block:'end'});
+  return div;
+}
+
+function renderResponse(msgEl, d, question) {
+  const body = msgEl.querySelector('.msg-body');
+  let html = '';
+
+  if(d.sql) {
+    const highlighted = d.sql.replace(/\b(SELECT|FROM|WHERE|JOIN|ON|GROUP BY|ORDER BY|LIMIT|AS|AND|OR|INNER|LEFT|RIGHT|COUNT|SUM|AVG|MAX|MIN|HAVING|DISTINCT|NOT|IN|LIKE|NULL|IS)\b/g,
+      '<span class="sql-keyword">$1</span>');
+    html += `<div class="msg-sql"><div class="msg-sql-label">SQL</div>${highlighted}</div>`;
+  }
+
+  if(d.explanation) {
+    html += `<div class="msg-explanation">${escHtml(d.explanation)}</div>`;
+  }
+
+  if(d.error && !d.success) {
+    html += `<div class="msg-error">[-] ${escHtml(d.error)}</div>`;
+  }
+
+  if(d.results && typeof d.results === 'string' && d.results.length > 2) {
+    html += renderRawResult(d.results);
+  }
+
+  if(d.healing_log && d.healing_log.length > 1) {
+    html += `<div class="healing-log">
+      <div class="healing-log-label">SELF-HEAL LOG</div>
+      ${d.healing_log.map(e => `<div class="healing-entry">${escHtml(e)}</div>`).join('')}
+    </div>`;
+  }
+
+  const retries = d.retries || 0;
+  const badge = retries > 0
+    ? `<span class="msg-meta-badge badge-healed">[healed: ${retries} ${retries===1?'retry':'retries'}]</span>`
+    : d.success
+      ? `<span class="msg-meta-badge badge-ok">[ok]</span>`
+      : `<span class="msg-meta-badge badge-err">[failed]</span>`;
+
+  html += `<div class="msg-meta">
+    ${badge}
+    ${d.response_time_s ? `<span class="msg-meta-item">${d.response_time_s}s</span>` : ''}
+    ${currentProvider ? `<span class="msg-meta-item">${currentProvider}</span>` : ''}
+  </div>`;
+
+  body.innerHTML = html;
+}
+
+function renderRawResult(raw) {
+  try {
+    const rows = raw.trim().replace(/^\[|\]$/g,'').split('),(').map(r =>
+      r.replace(/^\(|\)$/g,'').split(',').map(s => s.trim().replace(/^'|'$/g,''))
+    );
+    if(rows.length && rows[0].length > 0) {
+      const cols = rows[0].map((_,i) => 'col' + (i+1));
+      return `<div class="msg-table-wrap"><table class="msg-table">
+        <tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr>
+        ${rows.slice(0,20).map(r=>`<tr>${r.map(v=>`<td>${escHtml(String(v))}</td>`).join('')}</tr>`).join('')}
+        ${rows.length > 20 ? `<tr><td colspan="${cols.length}" style="color:var(--mute);font-size:11px">…${rows.length-20} more rows</td></tr>` : ''}
+      </table></div>`;
+    }
+  } catch(e) {}
+  return `<div class="uri-preview">${escHtml(raw.substring(0,400))}${raw.length>400?'…':''}</div>`;
+}
+
+function renderDemoResponse(msgEl, question) {
+  const body = msgEl.querySelector('.msg-body');
+  const demos = {
+    default: {
+      sql:`SELECT category, SUM(total_amount) AS revenue\nFROM orders\nWHERE created_at >= DATE_TRUNC('quarter', NOW() - INTERVAL '1 quarter')\nGROUP BY category\nORDER BY revenue DESC;`,
+      explanation:`Found 4 product categories with combined Q3 revenue of $412,800. Electronics led at $124,500 (30% of total), followed by Apparel at $98,200.`,
+      retries: 1, time: '1.2s'
+    }
+  };
+  const d = demos.default;
+  const highlighted = d.sql.replace(/\b(SELECT|FROM|WHERE|JOIN|ON|GROUP BY|ORDER BY|LIMIT|AS|AND|OR|INNER|LEFT|RIGHT|COUNT|SUM|AVG|MAX|MIN|HAVING|DISTINCT|DATE_TRUNC|INTERVAL|NOW)\b/g,
+    '<span class="sql-keyword">$1</span>');
+  body.innerHTML = `
+    <div class="msg-sql"><div class="msg-sql-label">SQL</div>${highlighted}</div>
+    <div class="msg-explanation">${d.explanation}</div>
+    <div class="healing-log">
+      <div class="healing-log-label">SELF-HEAL LOG</div>
+      <div class="healing-entry">[1] initial query returned no rows — relaxing date filter</div>
+      <div class="healing-entry">[2] executed successfully with 847 rows returned</div>
+    </div>
+    <div class="msg-meta">
+      <span class="msg-meta-badge badge-healed">[healed: 1 retry]</span>
+      <span class="msg-meta-item">${d.time}</span>
+      <span class="msg-meta-item">${currentProvider} (demo)</span>
+    </div>
+  `;
+}
+
+async function clearSession() {
+  try {
+    await fetch(API + '/sessions/current/clear', {method:'POST', credentials:'include'});
+  } catch(e) {}
+  document.getElementById('messages').innerHTML = `<div class="empty" style="padding:60px 0"><div class="empty-ascii">[_]</div><div class="empty-title">conversation cleared</div><div class="empty-sub">start a new query above</div></div>`;
+  notify('Conversation cleared [x]');
+}
+
+async function fetchHistory() {
+  const el = document.getElementById('history-content');
+  try {
+    const r = await fetch(API + '/sessions', {credentials:'include'});
+    if(r.ok) {
+      const sessions = await r.json();
+      if(!sessions.length) { el.innerHTML = `<div class="empty"><div class="empty-ascii">[~]</div><div class="empty-title">no sessions yet</div></div>`; return; }
+      el.innerHTML = sessions.map(s => `
+        <div class="session-row">
+          <div>
+            <div class="session-meta">session #${s.id} ${s.connection_id ? '· conn #'+s.connection_id : ''}</div>
+            <div class="session-count">${s.message_count} ${s.message_count===1?'query':'queries'} · ${new Date(s.started_at).toLocaleString()}</div>
+          </div>
+          <button class="session-action" onclick="loadSession(${s.id})">view →</button>
+        </div>
+      `).join('');
+    }
+  } catch(e) {
+    el.innerHTML = `<div class="empty"><div class="empty-ascii">[~]</div><div class="empty-title">no sessions yet</div><div class="empty-sub">start querying to see history</div></div>`;
+  }
+}
+
+async function loadSession(id) {
+  try {
+    const r = await fetch(API + '/sessions/' + id, {credentials:'include'});
+    const d = await r.json();
+    showPage('query');
+    const msgs = document.getElementById('messages');
+    msgs.innerHTML = '';
+    d.messages.forEach(m => {
+      const div = document.createElement('div');
+      div.className = 'msg';
+      const highlighted = (m.sql||'').replace(/\b(SELECT|FROM|WHERE|JOIN|ON|GROUP BY|ORDER BY|LIMIT|AS|AND|OR)\b/g,'<span class="sql-keyword">$1</span>');
+      div.innerHTML = `
+        <div class="msg-q">${escHtml(m.question)}</div>
+        <div class="msg-body">
+          ${m.sql ? `<div class="msg-sql"><div class="msg-sql-label">SQL</div>${highlighted}</div>` : ''}
+          ${m.answer ? `<div class="msg-explanation">${escHtml(m.answer)}</div>` : ''}
+          ${m.error ? `<div class="msg-error">[-] ${escHtml(m.error)}</div>` : ''}
+          <div class="msg-meta">
+            <span class="msg-meta-badge ${m.retries>0?'badge-healed':m.error?'badge-err':'badge-ok'}">${m.retries>0?'[healed: '+m.retries+']':m.error?'[failed]':'[ok]'}</span>
+            ${m.response_time ? `<span class="msg-meta-item">${m.response_time.toFixed(2)}s</span>` : ''}
+            <span class="msg-meta-item">${new Date(m.created_at).toLocaleTimeString()}</span>
+          </div>
+        </div>
+      `;
+      msgs.appendChild(div);
+    });
+  } catch(e) { notify('could not load session', 'err'); }
+}
+
+function escHtml(s) {
+  if(!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+fetchBudget();
+
+let demoTexts = [
+  'show me total revenue by product category last quarter',
+  'which users signed up in the last 7 days?',
+  'find the top 10 orders by value this month',
+  'how many active sessions are there right now?',
+  'average order value grouped by country',
+];
+let demoIdx = 0;
+function cycleDemoText() {
+  demoIdx = (demoIdx + 1) % demoTexts.length;
+  const el = document.getElementById('demo-input');
+  if(el) el.textContent = demoTexts[demoIdx];
+}
+setInterval(cycleDemoText, 3000);
+</script>
+</body>
+</html>

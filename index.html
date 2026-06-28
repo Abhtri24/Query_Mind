@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QueryMind</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --ink:#1a1a1a;--ink-soft:#2d2d2d;--canvas:#fafaf8;--surface:#f3f2ef;
+  --surface-card:#eceae5;--dark:#18181a;--dark-elevated:#242428;--dark-prompt:#2e2e34;
+  --hairline:rgba(0,0,0,0.10);--hairline-strong:#9a9898;--body:#3d3d3a;--mute:#6b6b67;
+  --ash:#9a9898;--accent:#007aff;--success:#30d158;--danger:#ff3b30;--warning:#ff9f0a;
+  --radius:4px;
+  font-family:'JetBrains Mono',ui-monospace,'IBM Plex Mono',monospace;
+}
+body{background:var(--canvas);color:var(--ink);min-height:100vh;font-size:15px;line-height:1.6}
+
+/* ── AUTH OVERLAY ── */
+#auth-overlay{
+  position:fixed;inset:0;background:var(--canvas);z-index:999;
+  display:flex;align-items:center;justify-content:center;
+}
+.auth-box{width:360px;border:1px solid var(--hairline);border-radius:var(--radius);padding:36px;background:var(--canvas)}
+.auth-title{font-size:16px;font-weight:700;margin-bottom:4px}
+.auth-sub{font-size:12px;color:var(--mute);margin-bottom:24px}
+.auth-tabs{display:flex;border-bottom:1px solid var(--hairline);margin-bottom:24px}
+.auth-tab{flex:1;padding:8px;font-family:inherit;font-size:13px;font-weight:500;background:none;border:none;color:var(--mute);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .15s}
+.auth-tab.active{color:var(--ink);border-bottom-color:var(--ash)}
+.auth-form{display:flex;flex-direction:column;gap:14px}
+.auth-err{font-size:12px;color:var(--danger);padding:8px 10px;background:rgba(255,59,48,.07);border-radius:var(--radius);border:1px solid rgba(255,59,48,.15);display:none}
+
+/* ── NAV ── */
+nav{position:sticky;top:0;z-index:100;background:var(--canvas);border-bottom:1px solid var(--hairline);padding:0 32px;height:52px;display:flex;align-items:center;justify-content:space-between}
+.wordmark{font-weight:700;font-size:14px;letter-spacing:.04em;color:var(--ink);display:flex;align-items:center;gap:8px}
+.wm-bracket{color:var(--mute);font-weight:400}
+.nav-links{display:flex;align-items:center;gap:4px}
+.nav-link{font-size:13px;color:var(--mute);font-weight:500;padding:5px 10px;border-radius:var(--radius);background:none;border:none;cursor:pointer;transition:color .15s,background .15s;font-family:inherit}
+.nav-link:hover{color:var(--ink);background:var(--surface)}
+.nav-link.active{color:var(--ink);background:var(--surface)}
+.nav-right{display:flex;align-items:center;gap:8px}
+.nav-user{font-size:12px;color:var(--mute)}
+.nav-cta{background:var(--ink);color:#fff;font-size:13px;font-weight:500;font-family:inherit;padding:5px 14px;border-radius:var(--radius);border:none;cursor:pointer;transition:background .15s}
+.nav-cta:hover{background:var(--ink-soft)}
+.nav-logout{font-size:12px;color:var(--mute);background:none;border:none;cursor:pointer;font-family:inherit;padding:5px 8px}
+.nav-logout:hover{color:var(--danger)}
+
+/* ── PAGES ── */
+.page{display:none;max-width:980px;margin:0 auto;padding:56px 32px 80px}
+.page.active{display:block}
+
+/* ── HERO ── */
+.hero{padding:72px 0 80px;border-bottom:1px solid var(--hairline)}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--mute);font-weight:500;letter-spacing:.06em;margin-bottom:18px}
+.eyebrow-dot{width:6px;height:6px;border-radius:50%;background:var(--success);animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+h1{font-size:34px;font-weight:700;line-height:1.25;color:var(--ink);margin-bottom:16px;max-width:580px}
+h1 span{color:var(--mute)}
+.hero-sub{font-size:14px;color:var(--body);max-width:460px;margin-bottom:32px;line-height:1.7}
+.hero-actions{display:flex;gap:10px;align-items:center}
+.btn-primary{background:var(--ink);color:#fff;font-family:inherit;font-size:13px;font-weight:500;padding:8px 18px;border-radius:var(--radius);border:none;cursor:pointer;transition:background .15s}
+.btn-primary:hover{background:var(--ink-soft)}
+.btn-primary:disabled{background:var(--surface-card);color:var(--ash);cursor:not-allowed}
+.btn-secondary{background:var(--canvas);color:var(--ink);font-family:inherit;font-size:13px;font-weight:500;padding:7px 18px;border-radius:var(--radius);border:1px solid var(--hairline-strong);cursor:pointer;transition:background .15s}
+.btn-secondary:hover{background:var(--surface)}
+
+/* ── TUI MOCKUP ── */
+.tui{background:var(--dark);margin-top:72px;padding:36px 28px 28px;position:relative}
+.tui::before{content:'● ● ●';position:absolute;top:12px;left:18px;font-size:10px;color:#444;letter-spacing:5px}
+.tui-prompt{background:var(--dark-prompt);border-radius:var(--radius);padding:10px 14px;display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.tui-cursor{color:var(--accent);font-weight:700;font-size:13px}
+.tui-input-mock{color:#e0e0e0;font-size:12px;flex:1}
+.tui-row{display:flex;gap:14px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:11px}
+.tui-row:last-child{border-bottom:none}
+.tui-col-k{min-width:130px;font-weight:500}
+.tui-col-v{color:#c8c8c8}
+.tui-footer{display:flex;align-items:center;gap:8px;margin-top:16px;font-size:10px;color:var(--ash);opacity:.6;border-top:1px solid rgba(255,255,255,.06);padding-top:10px}
+.tui-ok{color:var(--success)}
+
+/* ── FEATURES ── */
+.section{padding:72px 0;border-bottom:1px solid var(--hairline)}
+.section:last-child{border-bottom:none}
+.section-label{font-size:13px;font-weight:700;color:var(--ink);margin-bottom:20px;letter-spacing:.04em}
+.section-label::before{content:'[+] ';color:var(--mute)}
+.feat-row{display:flex;gap:14px;padding:13px 0;border-bottom:1px solid var(--hairline)}
+.feat-row:last-child{border-bottom:none}
+.feat-mark{color:var(--mute);font-weight:700;font-size:12px;min-width:22px;margin-top:2px}
+.feat-title{font-weight:700;font-size:13px;color:var(--ink);margin-bottom:2px}
+.feat-desc{font-size:12px;color:var(--body);line-height:1.6}
+
+/* ── FORMS ── */
+.page-header{border-bottom:1px solid var(--hairline);padding-bottom:18px;margin-bottom:28px}
+.page-title{font-size:15px;font-weight:700;color:var(--ink)}
+.page-sub{font-size:12px;color:var(--mute);margin-top:3px}
+.form-wrap{max-width:560px}
+.form-group{margin-bottom:18px}
+label{display:block;font-size:12px;font-weight:500;color:var(--ink);margin-bottom:5px}
+label .hint{color:var(--mute);font-weight:400}
+input[type=text],input[type=password],input[type=email]{
+  width:100%;background:var(--surface);color:var(--ink);font-family:inherit;font-size:13px;
+  border:1px solid var(--hairline);border-radius:var(--radius);padding:8px 11px;outline:none;transition:border-color .15s,background .15s
+}
+input:focus{background:var(--canvas);border-color:var(--ink)}
+.dialect-tabs{display:flex;border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden;margin-bottom:4px}
+.d-tab{flex:1;padding:7px 6px;font-family:inherit;font-size:12px;font-weight:500;background:none;border:none;cursor:pointer;color:var(--mute);transition:background .15s,color .15s}
+.d-tab.active{background:var(--ink);color:#fff}
+.uri-preview{margin-top:6px;background:var(--surface-card);border-radius:var(--radius);padding:7px 10px;font-size:11px;color:var(--mute);word-break:break-all}
+.status-msg{padding:9px 12px;border-radius:var(--radius);font-size:12px;margin-top:10px}
+.status-ok{background:rgba(48,209,88,.1);color:#1a7a3a;border:1px solid rgba(48,209,88,.2)}
+.status-err{background:rgba(255,59,48,.07);color:#cc2d22;border:1px solid rgba(255,59,48,.18)}
+.status-info{background:var(--surface);color:var(--mute);border:1px solid var(--hairline)}
+
+/* ── CONN LIST ── */
+.conn-list-wrap{margin-top:32px}
+.conn-item{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--hairline)}
+.conn-item:last-child{border-bottom:none}
+.conn-alias{font-size:13px;font-weight:700;color:var(--ink)}
+.conn-meta{font-size:11px;color:var(--mute);margin-top:2px}
+.conn-actions{display:flex;gap:6px}
+.btn-sm{font-family:inherit;font-size:12px;font-weight:500;padding:4px 11px;border-radius:var(--radius);cursor:pointer;transition:all .15s;border:none}
+.btn-ink{background:var(--ink);color:#fff}
+.btn-ink:hover{background:var(--ink-soft)}
+.btn-green{background:var(--success);color:#fff}
+.btn-ghost{background:none;color:var(--mute);border:1px solid var(--hairline) !important}
+.btn-ghost:hover{color:var(--danger);border-color:var(--danger) !important}
+
+/* ── QUERY LAYOUT ── */
+.q-layout{display:grid;grid-template-columns:210px 1fr;gap:20px;align-items:start}
+.sidebar-label{font-size:10px;font-weight:700;color:var(--mute);letter-spacing:.08em;margin-bottom:6px}
+.active-conn-box{background:var(--surface);border-radius:var(--radius);padding:10px 12px;border:1px solid var(--hairline);margin-bottom:10px}
+.acb-name{font-size:13px;font-weight:700;color:var(--ink)}
+.acb-dialect{font-size:11px;color:var(--mute)}
+.provider-tabs{display:flex;gap:5px;margin-top:6px}
+.p-tab{flex:1;font-family:inherit;font-size:11px;font-weight:500;padding:5px 4px;border:1px solid var(--hairline);background:none;color:var(--mute);border-radius:var(--radius);cursor:pointer;transition:all .15s}
+.p-tab.active{background:var(--ink);color:#fff;border-color:var(--ink)}
+.budget-box{margin-top:10px;padding:8px 10px;background:var(--surface);border-radius:var(--radius)}
+.budget-track{background:var(--surface-card);border-radius:2px;height:3px;margin:5px 0}
+.budget-fill{height:3px;border-radius:2px;background:var(--success);transition:width .4s}
+.budget-text{font-size:10px;color:var(--mute)}
+
+/* ── CHAT ── */
+.chat-wrap{display:flex;flex-direction:column;gap:14px}
+.chat-input-box{border:1px solid var(--hairline);border-radius:var(--radius);background:var(--canvas);transition:border-color .15s}
+.chat-input-box:focus-within{border-color:var(--ink)}
+textarea#q-input{width:100%;resize:none;border:none;outline:none;background:none;font-family:inherit;font-size:13px;color:var(--ink);padding:11px 13px;min-height:72px;border-bottom:1px solid var(--hairline)}
+textarea#q-input::placeholder{color:var(--ash)}
+.chat-bar{display:flex;justify-content:space-between;align-items:center;padding:7px 11px}
+.chat-hint{font-size:10px;color:var(--ash)}
+.send-btn{background:var(--ink);color:#fff;font-family:inherit;font-size:11px;font-weight:500;padding:5px 13px;border-radius:var(--radius);border:none;cursor:pointer}
+.send-btn:hover{background:var(--ink-soft)}
+.send-btn:disabled{background:var(--surface-card);color:var(--ash);cursor:not-allowed}
+
+/* ── MESSAGES ── */
+.messages{display:flex;flex-direction:column;gap:13px}
+.msg{border:1px solid var(--hairline);border-radius:var(--radius);overflow:hidden}
+.msg-q{padding:10px 13px;background:var(--surface);font-size:12px;font-weight:500;color:var(--ink)}
+.msg-q::before{content:'> ';color:var(--mute)}
+.msg-body{padding:13px}
+.msg-sql{background:var(--dark);border-radius:var(--radius);padding:10px 13px;font-size:11px;color:#d0d0d0;margin-bottom:10px;white-space:pre-wrap;line-height:1.65}
+.sql-label{font-size:9px;color:var(--ash);margin-bottom:6px;letter-spacing:.06em;font-weight:700}
+.kw{color:#8b8bdb;font-weight:700}
+.msg-explanation{font-size:13px;color:var(--body);margin-bottom:10px;line-height:1.7}
+.msg-table-wrap{overflow-x:auto;margin-top:6px}
+.msg-table{width:100%;border-collapse:collapse;font-size:11px}
+.msg-table th{text-align:left;padding:6px 9px;font-weight:700;color:var(--ink);border-bottom:2px solid var(--hairline);background:var(--surface);font-size:10px;letter-spacing:.04em}
+.msg-table td{padding:6px 9px;border-bottom:1px solid var(--hairline);color:var(--body)}
+.msg-table tr:last-child td{border-bottom:none}
+.msg-meta{display:flex;align-items:center;gap:10px;margin-top:8px;padding-top:8px;border-top:1px solid var(--hairline)}
+.meta-txt{font-size:10px;color:var(--mute)}
+.badge{font-size:9px;font-weight:700;padding:2px 6px;border-radius:var(--radius);letter-spacing:.04em}
+.b-ok{background:rgba(48,209,88,.1);color:#1a7a3a;border:1px solid rgba(48,209,88,.2)}
+.b-heal{background:rgba(255,159,10,.1);color:#8c5200;border:1px solid rgba(255,159,10,.2)}
+.b-err{background:rgba(255,59,48,.07);color:#cc2d22;border:1px solid rgba(255,59,48,.18)}
+.msg-error{background:rgba(255,59,48,.06);border:1px solid rgba(255,59,48,.15);border-radius:var(--radius);padding:9px 11px;font-size:12px;color:#cc2d22;margin-bottom:8px}
+.heal-log{margin-top:6px;padding:8px 11px;background:var(--surface);border-radius:var(--radius)}
+.heal-label{font-size:9px;font-weight:700;color:var(--mute);letter-spacing:.06em;margin-bottom:3px}
+.heal-entry{font-size:10px;color:var(--mute);padding:2px 0;border-bottom:1px solid var(--hairline)}
+.heal-entry:last-child{border-bottom:none}
+.loading{display:flex;align-items:center;gap:8px;padding:13px;font-size:12px;color:var(--mute)}
+.spinner{width:13px;height:13px;border:2px solid var(--hairline);border-top-color:var(--ink);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.empty-state{padding:48px 0;text-align:center}
+.es-glyph{font-size:22px;color:var(--surface-card);margin-bottom:10px;letter-spacing:4px}
+.es-title{font-size:14px;font-weight:700;color:var(--ink);margin-bottom:4px}
+.es-sub{font-size:12px;color:var(--mute)}
+
+/* ── HISTORY ── */
+.sess-row{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--hairline)}
+.sess-row:last-child{border-bottom:none}
+.sess-meta{font-size:12px;color:var(--ink);font-weight:500}
+.sess-count{font-size:11px;color:var(--mute);margin-top:2px}
+.sess-btn{font-size:11px;color:var(--accent);background:none;border:none;cursor:pointer;font-family:inherit}
+
+/* ── NOTIFY ── */
+.notify{position:fixed;bottom:20px;right:20px;z-index:9999;background:var(--ink);color:#fff;font-family:'JetBrains Mono',monospace;font-size:11px;padding:9px 16px;border-radius:var(--radius);opacity:0;transform:translateY(5px);transition:all .2s;pointer-events:none;max-width:300px}
+.notify.show{opacity:1;transform:translateY(0)}
+</style>
+</head>
+<body>
+
+<!-- AUTH OVERLAY -->
+<div id="auth-overlay">
+  <div class="auth-box">
+    <div class="auth-title">[QM] QueryMind</div>
+    <div class="auth-sub">sign in to continue</div>
+    <div class="auth-tabs">
+      <button class="auth-tab active" onclick="switchAuthTab('login',this)">login</button>
+      <button class="auth-tab" onclick="switchAuthTab('signup',this)">sign up</button>
+    </div>
+    <div id="auth-err" class="auth-err"></div>
+    <div class="auth-form">
+      <div class="form-group" style="margin-bottom:0">
+        <label>username</label>
+        <input type="text" id="auth-user" placeholder="abhinav" onkeydown="authKey(event)">
+      </div>
+      <div class="form-group" id="auth-email-group" style="margin-bottom:0;display:none">
+        <label>email <span class="hint">(optional)</span></label>
+        <input type="email" id="auth-email" placeholder="you@example.com">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label>password</label>
+        <input type="password" id="auth-pass" placeholder="••••••" onkeydown="authKey(event)">
+      </div>
+      <button class="btn-primary" id="auth-submit" onclick="submitAuth()" style="margin-top:4px">login →</button>
+    </div>
+  </div>
+</div>
+
+<!-- NAV -->
+<nav>
+  <div class="wordmark"><span class="wm-bracket">[</span>QM<span class="wm-bracket">]</span> QueryMind</div>
+  <div class="nav-links">
+    <button class="nav-link active" onclick="showPage('home')">home</button>
+    <button class="nav-link" onclick="showPage('connect')">connect db</button>
+    <button class="nav-link" onclick="showPage('query')">query</button>
+    <button class="nav-link" onclick="showPage('history')">history</button>
+  </div>
+  <div class="nav-right">
+    <span class="nav-user" id="nav-user"></span>
+    <button class="nav-logout" onclick="doLogout()">logout</button>
+    <button class="nav-cta" onclick="showPage('connect')">+ add db</button>
+  </div>
+</nav>
+
+<!-- HOME -->
+<div id="page-home" class="page active">
+  <div class="hero">
+    <div class="eyebrow"><span class="eyebrow-dot"></span>self-healing sql · multi-database · any llm</div>
+    <h1>Talk to your database<br><span>in plain English.</span></h1>
+    <p class="hero-sub">Connect any MySQL, PostgreSQL, or SQLite database. Ask questions naturally. QueryMind writes SQL, fixes its own mistakes, and explains what it found.</p>
+    <div class="hero-actions">
+      <button class="btn-primary" onclick="showPage('connect')">connect a database →</button>
+      <button class="btn-secondary" onclick="showPage('query')">try a query</button>
+    </div>
+  </div>
+  <div class="tui">
+    <div class="tui-prompt">
+      <span class="tui-cursor">›</span>
+      <span class="tui-input-mock" id="demo-q">show me total revenue by product category</span>
+    </div>
+    <div class="tui-row"><span class="tui-col-k" style="color:var(--accent)">sql generated</span><span class="tui-col-v">SELECT category, SUM(amount) FROM orders GROUP BY category…</span></div>
+    <div class="tui-row"><span class="tui-col-k" style="color:var(--warning)">retry [1/3]</span><span class="tui-col-v">empty result — relaxing date filter → LIKE → found 847 rows</span></div>
+    <div class="tui-row"><span class="tui-col-k" style="color:var(--success)">result</span><span class="tui-col-v">Electronics $124,500 · Apparel $98,200 · Home $67,800</span></div>
+    <div class="tui-footer"><span class="tui-ok">[ok]</span><span>1 self-heal retry · 1.2s · groq llama-3.3-70b</span></div>
+  </div>
+  <div class="section">
+    <div class="section-label">what it does</div>
+    <div class="feat-row"><span class="feat-mark">[+]</span><div><div class="feat-title">Self-healing SQL</div><div class="feat-desc">When a query fails or returns nothing, the agent diagnoses why — wrong column, too-strict filter, dialect mismatch — and retries autonomously up to 3 times.</div></div></div>
+    <div class="feat-row"><span class="feat-mark">[+]</span><div><div class="feat-title">Multi-database, zero config</div><div class="feat-desc">Paste any MySQL, PostgreSQL, or SQLite connection string. Schema is read live on first connect. SQL dialect is routed automatically.</div></div></div>
+    <div class="feat-row"><span class="feat-mark">[+]</span><div><div class="feat-title">Bring your own key</div><div class="feat-desc">Use your own Groq or Gemini key for unlimited queries. No key? Use the hosted budget — shown live in the query sidebar.</div></div></div>
+    <div class="feat-row"><span class="feat-mark">[+]</span><div><div class="feat-title">Conversation memory</div><div class="feat-desc">Ask follow-up questions naturally. Last 5 turns stay in context for every query in a session.</div></div></div>
+    <div class="feat-row"><span class="feat-mark">[x]</span><div><div class="feat-title">Read-only, always</div><div class="feat-desc">Every query is validated before execution. INSERT, UPDATE, DELETE, DROP — none will ever run.</div></div></div>
+  </div>
+  <div class="section">
+    <div class="section-label" style="margin-bottom:20px">coming next</div>
+    <div class="feat-row"><span class="feat-mark">[-]</span><div><div class="feat-title">Schema memory</div><div class="feat-desc">First-connect exploration saved to disk. Subsequent sessions load instantly — the agent knows your database, not just its tables.</div></div></div>
+    <div class="feat-row"><span class="feat-mark">[-]</span><div><div class="feat-title">Query planner</div><div class="feat-desc">Compound questions broken into sub-queries, chained, synthesised. "Worst category by growth and its top 3 customers" → two coordinated SQL calls.</div></div></div>
+    <div class="feat-row"><span class="feat-mark">[-]</span><div><div class="feat-title">Chart agent</div><div class="feat-desc">After every query, a second agent decides whether to visualise the result, picks the right chart type, and renders it.</div></div></div>
+  </div>
+</div>
+
+<!-- CONNECT -->
+<div id="page-connect" class="page">
+  <div class="page-header">
+    <div class="page-title">connect a database</div>
+    <div class="page-sub">connection is tested against your server before saving</div>
+  </div>
+  <div class="form-wrap">
+    <div class="form-group">
+      <label>database type</label>
+      <div class="dialect-tabs">
+        <button class="d-tab active" onclick="setDialect('mysql',this)">MySQL</button>
+        <button class="d-tab" onclick="setDialect('postgresql',this)">PostgreSQL</button>
+        <button class="d-tab" onclick="setDialect('sqlite',this)">SQLite</button>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>alias <span class="hint">— a name you'll recognise</span></label>
+      <input type="text" id="c-alias" placeholder="my-prod-db" oninput="buildUri()">
+    </div>
+    <div id="fields-mysql">
+      <div class="form-group"><label>host</label><input type="text" id="m-host" placeholder="localhost" oninput="buildUri()"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group"><label>user</label><input type="text" id="m-user" placeholder="root" oninput="buildUri()"></div>
+        <div class="form-group"><label>password</label><input type="password" id="m-pass" placeholder="••••••" oninput="buildUri()"></div>
+      </div>
+      <div class="form-group"><label>database</label><input type="text" id="m-db" placeholder="my_database" oninput="buildUri()"></div>
+    </div>
+    <div id="fields-postgresql" style="display:none">
+      <div class="form-group"><label>host</label><input type="text" id="p-host" placeholder="localhost" oninput="buildUri()"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group"><label>user</label><input type="text" id="p-user" placeholder="postgres" oninput="buildUri()"></div>
+        <div class="form-group"><label>password</label><input type="password" id="p-pass" placeholder="••••••" oninput="buildUri()"></div>
+      </div>
+      <div class="form-group"><label>database</label><input type="text" id="p-db" placeholder="my_database" oninput="buildUri()"></div>
+    </div>
+    <div id="fields-sqlite" style="display:none">
+      <div class="form-group"><label>file path <span class="hint">— absolute path on the server</span></label><input type="text" id="s-path" placeholder="/data/mydb.db" oninput="buildUri()"></div>
+    </div>
+    <div class="form-group">
+      <label>connection URI <span class="hint">— or paste directly</span></label>
+      <input type="text" id="c-uri" placeholder="mysql+pymysql://user:pass@host/db" oninput="uriManual=true">
+      <div class="uri-preview" id="uri-preview" style="display:none"></div>
+    </div>
+    <div id="conn-status"></div>
+    <div style="display:flex;gap:8px;margin-top:4px">
+      <button class="btn-primary" onclick="testConn()">test connection</button>
+      <button class="btn-secondary" onclick="saveConn()">save</button>
+    </div>
+  </div>
+  <div class="conn-list-wrap">
+    <div class="section-label" style="margin-bottom:14px">saved connections</div>
+    <div id="conn-items"></div>
+  </div>
+</div>
+
+<!-- QUERY -->
+<div id="page-query" class="page">
+  <div class="q-layout">
+    <div>
+      <div class="sidebar-label">active connection</div>
+      <div class="active-conn-box">
+        <div class="acb-name" id="acb-name">none</div>
+        <div class="acb-dialect" id="acb-dialect">go to connect db →</div>
+      </div>
+      <button class="btn-sm btn-ghost" style="width:100%;font-size:11px;padding:5px" onclick="showPage('connect')">change database</button>
+      <div style="margin-top:14px">
+        <div class="sidebar-label">llm provider</div>
+        <div class="provider-tabs">
+          <button class="p-tab active" onclick="setProvider('groq',this)">Groq</button>
+          <button class="p-tab" onclick="setProvider('gemini',this)">Gemini</button>
+        </div>
+        <input type="password" id="llm-key" placeholder="your api key (optional)" style="margin-top:7px;font-size:11px;width:100%;background:var(--surface);color:var(--ink);font-family:inherit;border:1px solid var(--hairline);border-radius:var(--radius);padding:6px 9px;outline:none">
+        <div style="margin-top:4px;font-size:10px;color:var(--mute)">no key → uses hosted budget</div>
+        <div class="budget-box">
+          <div class="sidebar-label" style="margin-bottom:4px">hosted budget</div>
+          <div class="budget-track"><div class="budget-fill" id="b-fill" style="width:100%"></div></div>
+          <div class="budget-text" id="b-text">loading…</div>
+        </div>
+        <button class="btn-sm btn-ghost" style="width:100%;font-size:10px;padding:5px;margin-top:10px" onclick="clearConv()">clear conversation [x]</button>
+      </div>
+    </div>
+    <div>
+      <div class="chat-input-box">
+        <textarea id="q-input" placeholder="ask anything about your database…&#10;e.g. &quot;how many users signed up last week?&quot;" onkeydown="qKey(event)"></textarea>
+        <div class="chat-bar">
+          <span class="chat-hint">shift+enter = new line · enter = send</span>
+          <button class="send-btn" id="send-btn" onclick="sendQ()">send →</button>
+        </div>
+      </div>
+      <div class="messages" id="messages">
+        <div class="empty-state">
+          <div class="es-glyph">[_]</div>
+          <div class="es-title">ready to query</div>
+          <div class="es-sub">connect a database and ask your first question</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- HISTORY -->
+<div id="page-history" class="page">
+  <div class="page-header">
+    <div class="page-title">session history</div>
+    <div class="page-sub">past conversations — click any session to replay it in the query view</div>
+  </div>
+  <div id="history-list"></div>
+</div>
+
+<div class="notify" id="notify"></div>
+
+<script>
+const API = '';   // same origin — Flask serves this file and the API
+let activeConn = null;
+let provider   = 'groq';
+let dialect    = 'mysql';
+let uriManual  = false;
+let authMode   = 'login';
+let busy       = false;
+
+/* ── AUTH ───────────────────────────────────────────────────────────── */
+function switchAuthTab(mode, btn) {
+  authMode = mode;
+  document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('auth-submit').textContent = mode === 'login' ? 'login →' : 'create account →';
+  document.getElementById('auth-email-group').style.display = mode === 'signup' ? 'block' : 'none';
+  document.getElementById('auth-err').style.display = 'none';
+}
+function authKey(e) { if(e.key==='Enter') submitAuth(); }
+async function submitAuth() {
+  const u = document.getElementById('auth-user').value.trim();
+  const p = document.getElementById('auth-pass').value;
+  const e = document.getElementById('auth-email').value.trim();
+  if(!u||!p){showAuthErr('username and password required');return}
+  const body = authMode==='signup' ? {username:u,password:p,email:e||undefined} : {username:u,password:p};
+  try {
+    const r = await api('/auth/'+authMode,'POST',body);
+    if(r.error){showAuthErr(r.error);return}
+    document.getElementById('auth-overlay').style.display='none';
+    document.getElementById('nav-user').textContent = '['+r.username+']';
+    loadConnections();
+    fetchBudget();
+    notify('welcome, '+r.username);
+  } catch(err){ showAuthErr('could not reach server — is Flask running on :8000?'); }
+}
+function showAuthErr(msg){const el=document.getElementById('auth-err');el.textContent=msg;el.style.display='block'}
+async function doLogout(){
+  await api('/auth/logout','POST');
+  location.reload();
+}
+
+/* ── NAV ─────────────────────────────────────────────────────────────── */
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-link').forEach(l=>l.classList.remove('active'));
+  document.getElementById('page-'+name).classList.add('active');
+  const idx = {home:0,connect:1,query:2,history:3}[name];
+  if(idx!==undefined) document.querySelectorAll('.nav-link')[idx].classList.add('active');
+  if(name==='connect') loadConnections();
+  if(name==='query')   fetchBudget();
+  if(name==='history') loadHistory();
+}
+
+/* ── CONNECT ─────────────────────────────────────────────────────────── */
+function setDialect(d, btn) {
+  dialect = d;
+  document.querySelectorAll('.d-tab').forEach(t=>t.classList.remove('active'));
+  btn.classList.add('active');
+  ['mysql','postgresql','sqlite'].forEach(x=>{
+    const el=document.getElementById('fields-'+x);
+    if(el) el.style.display = x===d ? 'block':'none';
+  });
+  uriManual=false; buildUri();
+}
+function buildUri() {
+  if(uriManual) return;
+  let uri='';
+  if(dialect==='mysql'){
+    const h=v('m-host')||'localhost',u=v('m-user'),p=v('m-pass'),d=v('m-db');
+    uri=`mysql+pymysql://${u}:${p}@${h}/${d}`;
+  } else if(dialect==='postgresql'){
+    const h=v('p-host')||'localhost',u=v('p-user'),p=v('p-pass'),d=v('p-db');
+    uri=`postgresql://${u}:${p}@${h}/${d}`;
+  } else {
+    uri=`sqlite:///${v('s-path')}`;
+  }
+  document.getElementById('c-uri').value=uri;
+  const pr=document.getElementById('uri-preview');
+  if(uri.length>10){pr.style.display='block';pr.textContent=uri}else pr.style.display='none';
+}
+async function testConn(){
+  const uri=v('c-uri'); if(!uri){connStatus('enter a URI first','err');return}
+  connStatus('testing…','info');
+  try {
+    const r=await api('/connections','POST',{alias:v('c-alias')||'test',uri});
+    if(r.error){connStatus('[-] '+r.error,'err')}
+    else {connStatus('[+] connection successful — saved as "'+r.alias+'"','ok');loadConnections();}
+  } catch(e){connStatus('[-] server error: '+e.message,'err')}
+}
+async function saveConn(){
+  const alias=v('c-alias'),uri=v('c-uri');
+  if(!alias||!uri){connStatus('alias and URI are required','err');return}
+  try{
+    const r=await api('/connections','POST',{alias,uri});
+    if(r.error){connStatus('[-] '+r.error,'err');return}
+    connStatus('[+] "'+r.alias+'" saved','ok');
+    loadConnections();notify('saved: '+r.alias,'ok');
+  }catch(e){connStatus('[-] '+e.message,'err')}
+}
+function connStatus(msg,type){
+  const el=document.getElementById('conn-status');
+  el.innerHTML=`<div class="status-msg ${type==='ok'?'status-ok':type==='err'?'status-err':'status-info'}">${esc(msg)}</div>`;
+}
+async function loadConnections(){
+  try{
+    const list=await api('/connections');
+    const el=document.getElementById('conn-items');
+    if(!list.length){
+      el.innerHTML='<div class="empty-state" style="padding:24px 0"><div class="es-glyph">[~]</div><div class="es-title">no connections yet</div></div>';
+      return;
+    }
+    el.innerHTML=list.map(c=>`
+      <div class="conn-item">
+        <div>
+          <div class="conn-alias">${esc(c.alias)}</div>
+          <div class="conn-meta">${esc(c.dialect)} · saved ${fmtDate(c.created_at)}</div>
+        </div>
+        <div class="conn-actions">
+          <button class="btn-sm ${activeConn&&activeConn.id===c.id?'btn-green':'btn-ink'}"
+            onclick="activateConn(${JSON.stringify(c).replace(/"/g,'&quot;')})">
+            ${activeConn&&activeConn.id===c.id?'active ✓':'use this'}
+          </button>
+          <button class="btn-sm btn-ghost" onclick="deleteConn(${c.id})">remove</button>
+        </div>
+      </div>`).join('');
+  }catch(e){}
+}
+function activateConn(c){
+  activeConn=c;
+  document.getElementById('acb-name').textContent=c.alias;
+  document.getElementById('acb-dialect').textContent=c.dialect;
+  loadConnections();
+  notify('active: '+c.alias,'ok');
+  showPage('query');
+}
+async function deleteConn(id){
+  await api('/connections/'+id,'DELETE');
+  if(activeConn&&activeConn.id===id) activeConn=null;
+  loadConnections();notify('connection removed');
+}
+
+/* ── LLM / BUDGET ─────────────────────────────────────────────────────── */
+function setProvider(p,btn){
+  provider=p;
+  document.querySelectorAll('.p-tab').forEach(t=>t.classList.remove('active'));
+  btn.classList.add('active');
+}
+async function fetchBudget(){
+  try{
+    const d=await api('/budget');
+    const pct=Math.max(0,Math.round(d.remaining/d.budget*100));
+    document.getElementById('b-fill').style.width=pct+'%';
+    document.getElementById('b-fill').style.background=pct>50?'var(--success)':pct>20?'var(--warning)':'var(--danger)';
+    document.getElementById('b-text').textContent=d.remaining.toLocaleString()+' / '+d.budget.toLocaleString()+' tokens left';
+  }catch(e){document.getElementById('b-text').textContent='offline'}
+}
+
+/* ── QUERY ─────────────────────────────────────────────────────────────── */
+function qKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendQ();}}
+async function sendQ(){
+  if(busy) return;
+  const q=document.getElementById('q-input').value.trim();
+  if(!q) return;
+  if(!activeConn){notify('select a database first','err');showPage('connect');return}
+  busy=true;
+  document.getElementById('send-btn').disabled=true;
+  document.getElementById('q-input').value='';
+  const msgs=document.getElementById('messages');
+  msgs.querySelectorAll('.empty-state').forEach(e=>e.remove());
+  const msgEl=addMessageShell(q,msgs);
+  const key=v('llm-key')||null;
+  try{
+    const r=await api('/query','POST',{
+      question:q,
+      connection_id:activeConn.id,
+      api_key:key,
+      provider:provider,
+    });
+    renderMsg(msgEl,r);
+    fetchBudget();
+  }catch(e){
+    msgEl.querySelector('.msg-body').innerHTML=`<div class="msg-error">[-] ${esc(e.message)}</div>`;
+  }
+  busy=false;
+  document.getElementById('send-btn').disabled=false;
+}
+function addMessageShell(q,container){
+  const d=document.createElement('div');
+  d.className='msg';
+  d.innerHTML=`<div class="msg-q">${esc(q)}</div><div class="msg-body"><div class="loading"><div class="spinner"></div>generating SQL…</div></div>`;
+  container.appendChild(d);
+  d.scrollIntoView({behavior:'smooth',block:'end'});
+  return d;
+}
+function renderMsg(el,d){
+  const body=el.querySelector('.msg-body');
+  let h='';
+  if(d.sql){
+    const hi=d.sql.replace(/\b(SELECT|FROM|WHERE|JOIN|ON|GROUP BY|ORDER BY|LIMIT|AS|AND|OR|INNER|LEFT|RIGHT|COUNT|SUM|AVG|MAX|MIN|HAVING|DISTINCT|LIKE|IN|NOT|IS|NULL|BY|CASE|WHEN|THEN|ELSE|END|UNION|WITH|INSERT|UPDATE|DELETE)\b/g,'<span class="kw">$1</span>');
+    h+=`<div class="msg-sql"><div class="sql-label">SQL</div>${hi}</div>`;
+  }
+  if(d.explanation) h+=`<div class="msg-explanation">${esc(d.explanation)}</div>`;
+  if(!d.success&&d.error) h+=`<div class="msg-error">[-] ${esc(d.error)}</div>`;
+  if(d.results) h+=renderResults(d.results);
+  if(d.healing_log&&d.healing_log.length>1){
+    h+=`<div class="heal-log"><div class="heal-label">SELF-HEAL LOG</div>${d.healing_log.map(e=>`<div class="heal-entry">${esc(e)}</div>`).join('')}</div>`;
+  }
+  const r=d.retries||0;
+  const badge=r>0?`<span class="badge b-heal">[healed: ${r} ${r===1?'retry':'retries'}]</span>`:d.success?`<span class="badge b-ok">[ok]</span>`:`<span class="badge b-err">[failed]</span>`;
+  h+=`<div class="msg-meta">${badge}${d.response_time_s?`<span class="meta-txt">${d.response_time_s}s</span>`:''}<span class="meta-txt">${provider}</span></div>`;
+  body.innerHTML=h;
+}
+function renderResults(raw){
+  if(!raw) return '';
+  if(typeof raw==='string'&&raw.length>2){
+    // Try to parse the string representation of list of tuples
+    try{
+      // Match patterns like [(val, val, ...), ...]
+      const rowStrings=raw.replace(/^\[|\]$/g,'').split(/\),\s*\(/);
+      const rows=rowStrings.map(r=>r.replace(/^\(?|\)?$/g,'').split(/,\s*(?=(?:[^']*'[^']*')*[^']*$)/).map(s=>s.trim().replace(/^'|'$/g,'')));
+      if(rows.length&&rows[0].length){
+        const cols=rows[0].map((_,i)=>'col'+(i+1));
+        return `<div class="msg-table-wrap"><table class="msg-table">
+          <tr>${cols.map(c=>`<th>${c}</th>`).join('')}</tr>
+          ${rows.slice(0,25).map(r=>`<tr>${r.map(v=>`<td>${esc(String(v))}</td>`).join('')}</tr>`).join('')}
+          ${rows.length>25?`<tr><td colspan="${cols.length}" style="color:var(--mute);font-size:10px">…${rows.length-25} more rows</td></tr>`:''}
+        </table></div>`;
+      }
+    }catch(e){}
+    return `<div class="uri-preview" style="margin-top:6px">${esc(raw.substring(0,600))}${raw.length>600?'…':''}</div>`;
+  }
+  if(Array.isArray(raw)&&raw.length){
+    const cols=Object.keys(raw[0]);
+    return `<div class="msg-table-wrap"><table class="msg-table">
+      <tr>${cols.map(c=>`<th>${esc(c)}</th>`).join('')}</tr>
+      ${raw.slice(0,25).map(r=>`<tr>${cols.map(c=>`<td>${esc(String(r[c]??''))}</td>`).join('')}</tr>`).join('')}
+      ${raw.length>25?`<tr><td colspan="${cols.length}" style="color:var(--mute);font-size:10px">…${raw.length-25} more rows</td></tr>`:''}
+    </table></div>`;
+  }
+  return '';
+}
+async function clearConv(){
+  await api('/sessions/current/clear','POST');
+  document.getElementById('messages').innerHTML=`<div class="empty-state"><div class="es-glyph">[_]</div><div class="es-title">conversation cleared</div></div>`;
+  notify('conversation cleared [x]');
+}
+
+/* ── HISTORY ─────────────────────────────────────────────────────────── */
+async function loadHistory(){
+  const el=document.getElementById('history-list');
+  try{
+    const sessions=await api('/sessions');
+    if(!sessions.length){
+      el.innerHTML='<div class="empty-state"><div class="es-glyph">[~]</div><div class="es-title">no sessions yet</div></div>';
+      return;
+    }
+    el.innerHTML=sessions.map(s=>`
+      <div class="sess-row">
+        <div>
+          <div class="sess-meta">session #${s.id}${s.connection_id?' · conn #'+s.connection_id:''}</div>
+          <div class="sess-count">${s.message_count} ${s.message_count===1?'query':'queries'} · ${fmtDate(s.started_at)}</div>
+        </div>
+        <button class="sess-btn" onclick="replaySession(${s.id})">view →</button>
+      </div>`).join('');
+  }catch(e){el.innerHTML='<div class="empty-state"><div class="es-glyph">[~]</div><div class="es-title">no sessions yet</div></div>'}
+}
+async function replaySession(id){
+  try{
+    const d=await api('/sessions/'+id);
+    showPage('query');
+    const msgs=document.getElementById('messages');
+    msgs.innerHTML='';
+    d.messages.forEach(m=>{
+      const el=addMessageShell(m.question,msgs);
+      renderMsg(el,{
+        success:!m.error,sql:m.sql,explanation:m.answer,error:m.error,
+        retries:m.retries||0,response_time_s:m.response_time?m.response_time.toFixed(2):null,
+      });
+    });
+  }catch(e){notify('could not load session','err')}
+}
+
+/* ── UTILS ─────────────────────────────────────────────────────────────── */
+async function api(path,method='GET',body){
+  const opts={method,credentials:'include',headers:{}};
+  if(body){opts.headers['Content-Type']='application/json';opts.body=JSON.stringify(body);}
+  const r=await fetch(API+path,opts);
+  const d=await r.json();
+  if(!r.ok&&r.status!==401&&!d.error) throw new Error('HTTP '+r.status);
+  return d;
+}
+function v(id){return document.getElementById(id)?.value?.trim()||''}
+function esc(s){if(!s)return '';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function fmtDate(s){if(!s)return '—';try{return new Date(s).toLocaleString()}catch{return s}}
+function notify(msg,type){
+  const el=document.getElementById('notify');
+  el.textContent=msg;
+  el.style.background=type==='err'?'#cc2d22':type==='ok'?'#1a7a3a':'var(--ink)';
+  el.classList.add('show');
+  setTimeout(()=>el.classList.remove('show'),2800);
+}
+const demoQs=['show me total revenue by product category','which users signed up last week?','find top 10 orders by value','average session duration by country','how many active records are there?'];
+let demoI=0;
+setInterval(()=>{demoI=(demoI+1)%demoQs.length;const e=document.getElementById('demo-q');if(e)e.textContent=demoQs[demoI];},3200);
+</script>
+</body>
+</html>

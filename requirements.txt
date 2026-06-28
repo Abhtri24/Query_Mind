@@ -1,0 +1,26 @@
+# ── Web framework ──────────────────────────────────────────────────────────
+flask>=3.0
+flask-login>=0.6
+flask-bcrypt>=1.0
+flask-cors>=4.0          # needed when React frontend runs on a different port
+
+# ── ORM ───────────────────────────────────────────────────────────────────
+sqlalchemy>=2.0
+
+# ── DB drivers (install only what you need) ───────────────────────────────
+pymysql>=1.1             # MySQL
+psycopg2-binary>=2.9     # PostgreSQL
+# sqlite3 is built-in, no install needed
+
+# ── LangChain core ────────────────────────────────────────────────────────
+langchain>=0.2
+langchain-community>=0.2
+
+# ── LLM providers (install at least one) ─────────────────────────────────
+langchain-groq>=0.1      # Groq (free tier, fast)
+langchain-google-genai>=1.0  # Gemini (free tier)
+# langchain-openai>=0.1  # OpenAI (uncomment if needed)
+
+# ── Utilities ─────────────────────────────────────────────────────────────
+python-dotenv>=1.0
+pytz>=2024
