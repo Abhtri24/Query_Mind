@@ -21,6 +21,15 @@ langchain-groq>=0.1      # Groq (free tier, fast)
 langchain-google-genai>=1.0  # Gemini (free tier)
 # langchain-openai>=0.1  # OpenAI (uncomment if needed)
 
+# ── Security & encryption ────────────────────────────────────────────────
+cryptography>=42.0       # Fernet encryption for DB URIs at rest
+
+# ── Rate limiting ────────────────────────────────────────────────────────
+flask-limiter>=3.5
+redis>=5.0               # Backend for rate limiter (Upstash/Redis)
+
+# ── Production server ────────────────────────────────────────────────────
+gunicorn>=22.0           # WSGI server for deployment
+
 # ── Utilities ─────────────────────────────────────────────────────────────
 python-dotenv>=1.0
-pytz>=2024

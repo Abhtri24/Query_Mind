@@ -14,13 +14,9 @@ Usage:
     db, engine = get_db_from_uri("mysql+pymysql://user:pass@host/dbname")
 """
 
-import os
 import logging
 import threading
 from typing import Tuple
-from dotenv import load_dotenv
-
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +160,7 @@ def get_default_db():
     Returns the default database connection using DB_URI from environment.
     Used for backward compatibility with the original dbconfig.py pattern.
     """
+    import os
     uri = os.getenv("DB_URI")
     if not uri:
         raise ValueError(

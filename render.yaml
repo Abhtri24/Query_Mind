@@ -1,0 +1,40 @@
+# render.yaml — Render infrastructure-as-code
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: querymind-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120 --preload
+    healthCheckPath: /health
+    envVars:
+      - key: ENV
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      - key: APP_DB_URI
+        fromDatabase:
+          name: querymind-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: querymind-redis
+          type: redis
+          property: connectionString
+      - key: HOSTED_LLM_PROVIDER
+        value: groq
+      - key: HOSTED_LLM_API_KEY
+        sync: false       # manual — don't commit secrets
+      - key: HOSTED_DAILY_TOKEN_BUDGET
+        value: "50000"
+      - key: ALLOWED_ORIGINS
+        value: "https://your-frontend-domain.com"
+
+databases:
+  - name: querymind-db
+    plan: free
+    databaseName: querymind_app

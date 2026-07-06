@@ -10,19 +10,17 @@ Priority order:
 Supported providers: groq, gemini
 """
 
-import os
 import logging
 import threading
 from datetime import datetime, date
-from dotenv import load_dotenv
 
-load_dotenv()
+from config import cfg
 
 logger = logging.getLogger(__name__)
 
 # ─── Token budget for hosted fallback ────────────────────────────────────────
 # Adjust these to match your free-tier limits
-HOSTED_DAILY_TOKEN_BUDGET = int(os.getenv("HOSTED_DAILY_TOKEN_BUDGET", "50000"))
+HOSTED_DAILY_TOKEN_BUDGET = cfg.HOSTED_DAILY_TOKEN_BUDGET
 
 _budget_lock = threading.Lock()
 _budget_state = {
@@ -70,7 +68,7 @@ def _build_groq_llm(api_key: str, model: str = None):
     except ImportError:
         raise ImportError("Install langchain-groq: pip install langchain-groq")
 
-    model = model or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    model = model or "llama-3.3-70b-versatile"
     return ChatGroq(
         temperature=0,
         model_name=model,
@@ -85,7 +83,7 @@ def _build_gemini_llm(api_key: str, model: str = None):
     except ImportError:
         raise ImportError("Install langchain-google-genai: pip install langchain-google-genai")
 
-    model = model or os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    model = model or "gemini-1.5-flash"
     return ChatGoogleGenerativeAI(
         temperature=0,
         model=model,
@@ -100,7 +98,7 @@ def _build_openai_llm(api_key: str, model: str = None):
     except ImportError:
         raise ImportError("Install langchain-openai: pip install langchain-openai")
 
-    model = model or os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    model = model or "gpt-4o-mini"
     return ChatOpenAI(
         temperature=0,
         model=model,
@@ -150,8 +148,8 @@ def get_llm(
         return builder(api_key=user_api_key, model=user_model)
 
     # ── Path 2: hosted fallback ────────────────────────────────────────────
-    hosted_provider = os.getenv("HOSTED_LLM_PROVIDER", "groq").lower()
-    hosted_key = os.getenv("HOSTED_LLM_API_KEY") or os.getenv("GROQ_API_KEY") or os.getenv("GEMINI_API_KEY")
+    hosted_provider = cfg.HOSTED_LLM_PROVIDER.lower()
+    hosted_key = cfg.HOSTED_LLM_API_KEY
 
     if not hosted_key:
         raise RuntimeError(

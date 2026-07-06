@@ -344,9 +344,18 @@ def run_nl_query(
     engine,
     dialect: str = "mysql",
     chat_history: list = None,
+    uri: str = None,          # needed for schema memory lookup
+    memory=None,              # pre-loaded MemoryData (avoids re-loading per turn)
+    conn_id: int = None,      # DB connection ID for schema memory persistence
+    app_db_session=None,      # app metadata DB session for schema memory persistence
 ) -> Dict:
     """
     Convert a natural language question to SQL, execute it, explain the result.
+
+    Schema source priority:
+      1. memory (MemoryData passed in) — richest, fastest
+      2. uri provided → load_or_explore() — loads cache or runs first-connect exploration
+      3. fallback → live fetch from information_schema (original behaviour)
 
     Returns:
         {
@@ -357,12 +366,40 @@ def run_nl_query(
             error       : str | None,
             retries     : int,
             healing_log : list[str],
+            schema_source: "memory" | "live",
         }
     """
-    all_tables = get_all_table_names(db, engine)
-    relevant   = pick_relevant_tables(question, all_tables)
-    schema     = fetch_schema(db, engine, relevant)
-    dialect    = dialect or "mysql"
+    dialect = dialect or "mysql"
+    schema_source = "live"
+
+    # ── Try schema memory first ───────────────────────────────────────────
+    if memory is None and uri:
+        try:
+            from schema_memory import load_or_explore
+            memory = load_or_explore(
+                uri=uri, db=db, engine=engine, llm=llm, dialect=dialect,
+                conn_id=conn_id, app_db_session=app_db_session,
+            )
+        except Exception as e:
+            logger.warning(f"[Memory] Could not load/explore: {e}")
+            memory = None
+
+    if memory is not None:
+        try:
+            from schema_memory import get_schema_context
+            schema = get_schema_context(memory, question)
+            schema_source = "memory"
+            logger.info(f"[Memory] Using cached schema memory ({len(memory.tables)} tables)")
+        except Exception as e:
+            logger.warning(f"[Memory] get_schema_context failed: {e}")
+            memory = None
+
+    # ── Fallback: live schema fetch ───────────────────────────────────────
+    if memory is None:
+        all_tables = get_all_table_names(db, engine)
+        relevant   = pick_relevant_tables(question, all_tables)
+        schema     = fetch_schema(db, engine, relevant)
+        logger.info("[Memory] Using live schema fetch (no memory available)")
 
     qr = execute_with_healing(
         question=question,
@@ -375,13 +412,14 @@ def run_nl_query(
     )
 
     return {
-        "success":     qr.success,
-        "sql":         qr.sql or None,
-        "results":     qr.rows,
-        "explanation": explain_result(llm, question, qr.sql, qr.rows) if qr.success else None,
-        "error":       qr.error,
-        "retries":     qr.retries,
-        "healing_log": qr.healing_log,
+        "success":       qr.success,
+        "sql":           qr.sql or None,
+        "results":       qr.rows,
+        "explanation":   explain_result(llm, question, qr.sql, qr.rows) if qr.success else None,
+        "error":         qr.error,
+        "retries":       qr.retries,
+        "healing_log":   qr.healing_log,
+        "schema_source": schema_source,
     }
 
 

@@ -5,10 +5,15 @@ Blueprint for login / signup / logout.
 Passwords hashed with bcrypt. Sessions managed by Flask-Login.
 """
 
+import logging
 from flask import Blueprint, request, jsonify
 from flask_bcrypt import Bcrypt
 from flask_login import login_user, logout_user, login_required, current_user
 from models import User, get_session_factory
+from config import cfg
+from limiter import limiter
+
+logger = logging.getLogger(__name__)
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
 bcrypt  = Bcrypt()
@@ -21,6 +26,7 @@ def _db():
 # ─── Signup ───────────────────────────────────────────────────────────────────
 
 @auth_bp.route("/signup", methods=["POST"])
+@limiter.limit(lambda: cfg.RATE_LIMIT_AUTH)
 def signup():
     data     = request.get_json() or {}
     username = (data.get("username") or "").strip()
@@ -48,6 +54,7 @@ def signup():
 # ─── Login ────────────────────────────────────────────────────────────────────
 
 @auth_bp.route("/login", methods=["POST"])
+@limiter.limit(lambda: cfg.RATE_LIMIT_AUTH)
 def login():
     data     = request.get_json() or {}
     username = (data.get("username") or "").strip()
