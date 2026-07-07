@@ -33,3 +33,5 @@ gunicorn>=22.0           # WSGI server for deployment
 
 # ── Utilities ─────────────────────────────────────────────────────────────
 python-dotenv>=1.0
+sqlglot>=25.0.0
+

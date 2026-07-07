@@ -18,6 +18,10 @@ import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+import sqlglot
+import sqlglot.expressions as exp
+from sqlglot.errors import ParseError
+
 logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
@@ -116,24 +120,64 @@ def extract_sql(text: str) -> Optional[str]:
     return None
 
 
-DANGEROUS = [
-    r"\bDROP\s+TABLE\b", r"\bDROP\s+DATABASE\b", r"\bDELETE\s+FROM\b",
-    r"\bINSERT\s+INTO\b", r"\bUPDATE\s+\w+\s+SET\b", r"\bALTER\s+TABLE\b",
-    r"\bCREATE\s+TABLE\b", r"\bTRUNCATE\b", r"\bGRANT\b", r"\bREVOKE\b",
-    r"\bEXEC(UTE)?\b",
-]
-
-
-def validate_sql(sql: str) -> Tuple[bool, str]:
-    """Safety check. Returns (ok, reason)."""
-    if not sql:
+def validate_sql(sql: str, dialect: str = "mysql") -> Tuple[bool, str]:
+    """Safety check using AST parsing. Returns (ok, reason)."""
+    if not sql or not sql.strip():
         return False, "Empty query"
-    cleaned = re.sub(r"--.*", "", sql, flags=re.MULTILINE).strip()
-    if not cleaned.upper().startswith("SELECT"):
-        return False, "Only SELECT queries are allowed"
-    for pat in DANGEROUS:
-        if re.search(pat, cleaned, re.IGNORECASE):
-            return False, f"Blocked pattern: {pat}"
+
+    # Map dialect names from the application to sqlglot's dialect names
+    dialect_map = {
+        "postgresql": "postgres",
+        "postgres": "postgres",
+        "mysql": "mysql",
+        "sqlite": "sqlite",
+    }
+    sqlglot_dialect = dialect_map.get(dialect.lower(), dialect)
+
+    try:
+        parsed = sqlglot.parse(sql, read=sqlglot_dialect)
+    except ParseError as e:
+        return False, f"Unparsable SQL: {str(e)}"
+    except Exception as e:
+        return False, f"Error parsing SQL: {str(e)}"
+
+    # Filter out None values and Semicolon nodes (which are parsed by sqlglot but aren't statements)
+    statements = [stmt for stmt in parsed if stmt is not None and not isinstance(stmt, exp.Semicolon)]
+
+    if len(statements) == 0:
+        return False, "Empty query"
+    if len(statements) > 1:
+        return False, "Only one SQL statement is allowed"
+
+    stmt = statements[0]
+
+    # Only allow SELECT queries (including UNION/INTERSECT/EXCEPT queries)
+    if not isinstance(stmt, exp.Query):
+        return False, f"Only SELECT statements are allowed (found {stmt.__class__.__name__})"
+
+    # Blocked AST nodes for DDL/DML, transactions, and unsafe commands
+    FORBIDDEN_NODES = (
+        exp.Insert,
+        exp.Update,
+        exp.Delete,
+        exp.Merge,
+        exp.Create,
+        exp.Drop,
+        exp.Alter,
+        exp.TruncateTable,
+        exp.Grant,
+        exp.Revoke,
+        exp.Command,
+        exp.Transaction,
+        exp.Commit,
+        exp.Rollback,
+    )
+
+    # Walk the AST to reject any forbidden nodes nested inside the statement
+    for node in stmt.walk():
+        if isinstance(node, FORBIDDEN_NODES):
+            return False, f"Blocked modification or command node: {node.__class__.__name__}"
+
     return True, "ok"
 
 
@@ -271,7 +315,7 @@ def execute_with_healing(
             continue
 
         # ── 3. Critic ─────────────────────────────────────────────────────
-        ok, reason = validate_sql(sql)
+        ok, reason = validate_sql(sql, dialect)
         if not ok:
             error = reason
             log.append(f"[{attempt+1}] Critic rejected: {reason}")
