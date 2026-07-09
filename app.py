@@ -44,7 +44,7 @@ from db_connector import (clear_connection_cache, detect_dialect,
 from limiter import limiter
 from llm_provider import get_budget_status, get_llm
 from models import (ChatMessage, ChatSession, DBConnection, User,
-                    create_tables, get_session_factory)
+                    create_tables, get_db_session)
 from schema_memory import (delete_memory_from_db, explore_and_save,
                            get_schema_context, load_or_explore,
                            memory_summary_for_api)
@@ -88,12 +88,22 @@ def create_app() -> Flask:
 
     @login_manager.user_loader
     def load_user(user_id):
-        s = get_session_factory()()
-        return s.query(User).get(int(user_id))
+        s = get_db_session()
+        return s.get(User, int(user_id))
 
     @login_manager.unauthorized_handler
     def unauthorized():
         return jsonify({"error": "Authentication required"}), 401
+
+    @app.teardown_appcontext
+    def teardown_db_session(exception=None):
+        from flask import g
+        db_session = g.pop('db_session', None)
+        if db_session is not None:
+            try:
+                db_session.close()
+            except Exception:
+                pass
 
     # ── Flask-Bcrypt ─────────────────────────────────────────────────────
     bcrypt.init_app(app)
@@ -101,31 +111,13 @@ def create_app() -> Flask:
     # ── Blueprints ───────────────────────────────────────────────────────
     app.register_blueprint(auth_bp)
 
-    # ── In-memory conversation history store (per session_id) ─────────────
-    # { session_id: [HumanMessage, AIMessage, ...] }
-    _history_store: dict = {}
-    _history_lock  = threading.Lock()
-
-    def _get_history(session_id: str) -> list:
-        with _history_lock:
-            return _history_store.setdefault(session_id, [])
-
-    def _append_history(session_id: str, question: str, answer: str):
-        with _history_lock:
-            h = _history_store.setdefault(session_id, [])
-            h.append(HumanMessage(content=question))
-            h.append(AIMessage(content=answer or ""))
-            # Keep last 10 messages (5 turns)
-            _history_store[session_id] = h[-10:]
-
-    def _clear_history(session_id: str):
-        with _history_lock:
-            _history_store.pop(session_id, None)
+    # ── Shared conversation history (Redis + DB fallback) ─────────────────
+    from history import _get_history, _append_history, _clear_history
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
     def _app_db():
-        return get_session_factory()()
+        return get_db_session()
 
     def _get_llm_for_request():
         """Picks LLM based on what the user sent in the request."""
@@ -225,8 +217,33 @@ def create_app() -> Flask:
     @app.route("/connections", methods=["GET"])
     @login_required
     def list_connections():
+        try:
+            page = int(request.args.get("page", 1))
+            if page < 1:
+                page = 1
+        except ValueError:
+            page = 1
+
+        try:
+            limit = int(request.args.get("limit", 20))
+            if limit < 1:
+                limit = 20
+            elif limit > 100:
+                limit = 100
+        except ValueError:
+            limit = 20
+
+        offset = (page - 1) * limit
+
         s    = _app_db()
-        rows = s.query(DBConnection).filter_by(user_id=current_user.id).all()
+        rows = (
+            s.query(DBConnection)
+             .filter_by(user_id=current_user.id)
+             .order_by(DBConnection.id.desc())
+             .offset(offset)
+             .limit(limit)
+             .all()
+        )
         return jsonify([
             {"id": c.id, "alias": c.alias, "dialect": c.dialect,
              "has_memory": c.schema_memory_json is not None,
@@ -398,12 +415,31 @@ def create_app() -> Flask:
     @app.route("/sessions", methods=["GET"])
     @login_required
     def list_sessions():
+        try:
+            page = int(request.args.get("page", 1))
+            if page < 1:
+                page = 1
+        except ValueError:
+            page = 1
+
+        try:
+            limit = int(request.args.get("limit", 20))
+            if limit < 1:
+                limit = 20
+            elif limit > 100:
+                limit = 100
+        except ValueError:
+            limit = 20
+
+        offset = (page - 1) * limit
+
         s    = _app_db()
         rows = (
             s.query(ChatSession)
              .filter_by(user_id=current_user.id)
              .order_by(ChatSession.started_at.desc())
-             .limit(50)
+             .offset(offset)
+             .limit(limit)
              .all()
         )
         return jsonify([

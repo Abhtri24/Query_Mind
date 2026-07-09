@@ -9,7 +9,7 @@ import logging
 from flask import Blueprint, request, jsonify
 from flask_bcrypt import Bcrypt
 from flask_login import login_user, logout_user, login_required, current_user
-from models import User, get_session_factory
+from models import User, get_db_session
 from config import cfg
 from limiter import limiter
 
@@ -20,7 +20,7 @@ bcrypt  = Bcrypt()
 
 
 def _db():
-    return get_session_factory()()
+    return get_db_session()
 
 
 # ─── Signup ───────────────────────────────────────────────────────────────────

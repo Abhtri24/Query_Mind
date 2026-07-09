@@ -101,10 +101,22 @@ class ChatMessage(Base):
     session = relationship("ChatSession", back_populates="messages")
 
 
+class SessionHistory(Base):
+    __tablename__ = "nl2db_session_history"
+
+    session_id   = Column(String(255), primary_key=True)
+    history_json = Column(Text, nullable=False)
+
+
 # ─── Engine & session helpers ─────────────────────────────────────────────────
 
+
 def _build_engine():
+    from flask import has_app_context, current_app
     uri = cfg.APP_DB_URI
+    if has_app_context() and "SQLALCHEMY_DATABASE_URI" in current_app.config:
+        uri = current_app.config["SQLALCHEMY_DATABASE_URI"]
+
     kwargs: dict = {"pool_pre_ping": True}
     if "sqlite" in uri:
         kwargs["connect_args"] = {"check_same_thread": False}
@@ -130,6 +142,17 @@ def get_engine():
 
 def get_session_factory():
     return sessionmaker(autocommit=False, autoflush=False, bind=get_engine())
+
+
+def get_db_session():
+    from flask import g, has_app_context
+    if has_app_context():
+        if 'db_session' not in g:
+            g.db_session = get_session_factory()()
+        return g.db_session
+    else:
+        return get_session_factory()()
+
 
 
 def create_tables():

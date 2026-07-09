@@ -325,7 +325,34 @@ def execute_with_healing(
 
         # ── 4. Execute ────────────────────────────────────────────────────
         try:
-            result = db.run(sql)
+            from sqlalchemy import text
+            with engine.connect() as conn:
+                res = conn.execute(text(sql))
+                if res.returns_rows:
+                    cols = list(res.keys())
+                    db_rows = res.fetchall()
+
+                    # Helper for custom value serialization
+                    import datetime
+                    from decimal import Decimal
+                    def serialise_value(val):
+                        if isinstance(val, (datetime.datetime, datetime.date)):
+                            return val.isoformat()
+                        if isinstance(val, Decimal):
+                            return float(val)
+                        if isinstance(val, bytes):
+                            return val.decode('utf-8', errors='replace')
+                        return val
+
+                    result = []
+                    for row in db_rows:
+                        row_dict = {}
+                        for i, col in enumerate(cols):
+                            row_dict[col] = serialise_value(row[i])
+                        result.append(row_dict)
+                else:
+                    result = []
+
             log.append(f"[{attempt+1}] Executed OK")
 
             if not result and attempt < MAX_RETRIES:
