@@ -235,12 +235,7 @@ Output only the Final Answer block — no prose before or after it.
 """
 
 
-def _build_healing_strategy(error: str, empty_result: bool = False) -> str:
-    if empty_result:
-        return (
-            "The query returned no rows. Relax exact string filters: "
-            "swap = for LIKE and wrap values in % wildcards."
-        )
+def _build_healing_strategy(error: str) -> str:
     e = error.lower()
     if "unknown column" in e or ("column" in e and "exist" in e):
         m = re.search(r"unknown column '([^']+)'", e)
@@ -255,6 +250,130 @@ def _build_healing_strategy(error: str, empty_result: bool = False) -> str:
     return "Read the error carefully and fix the query."
 
 
+# ─── Execution helpers ────────────────────────────────────────────────────────
+
+def _sqlglot_dialect_name(dialect: str) -> str:
+    return {
+        "postgresql": "postgres",
+        "postgres":   "postgres",
+        "mysql":      "mysql",
+        "sqlite":     "sqlite",
+    }.get((dialect or "").lower(), dialect)
+
+
+def _ensure_result_limit(sql: str, dialect: str, row_limit: int) -> tuple[str, bool]:
+    """
+    Inject a LIMIT via AST only when the query does not already have one.
+    Returns (sql_to_execute, was_guardrail_applied).
+    """
+    try:
+        parsed = sqlglot.parse_one(sql, read=_sqlglot_dialect_name(dialect))
+        if parsed is None or not isinstance(parsed, exp.Query):
+            return sql, False
+        if parsed.args.get("limit") is not None:
+            return sql, False
+        parsed.set("limit", exp.Limit(expression=exp.Literal.number(row_limit)))
+        return parsed.sql(dialect=_sqlglot_dialect_name(dialect)), True
+    except Exception as e:
+        logger.warning(f"[Exec] Could not inject default LIMIT: {e}")
+        return sql, False
+
+
+class QueryTimeoutError(RuntimeError):
+    pass
+
+
+def _apply_query_timeout(conn, dialect: str, timeout_ms: int) -> None:
+    if timeout_ms <= 0:
+        return
+    from sqlalchemy import text
+    normalized = (dialect or "").lower()
+    if normalized in ("postgresql", "postgres"):
+        conn.execute(text(f"SET statement_timeout = {int(timeout_ms)}"))
+    elif normalized == "mysql":
+        conn.execute(text(f"SET SESSION MAX_EXECUTION_TIME = {int(timeout_ms)}"))
+
+
+def _reset_query_timeout(conn, dialect: str) -> None:
+    from sqlalchemy import text
+    normalized = (dialect or "").lower()
+    if normalized in ("postgresql", "postgres"):
+        conn.execute(text("SET statement_timeout = 0"))
+    elif normalized == "mysql":
+        conn.execute(text("SET SESSION MAX_EXECUTION_TIME = 0"))
+
+
+def _is_timeout_error(err: Exception) -> bool:
+    message = str(err).lower()
+    return any(fragment in message for fragment in (
+        "statement timeout",
+        "query timed out",
+        "timeout expired",
+        "max_execution_time",
+        "maximum statement execution time exceeded",
+        "query execution was interrupted",
+        "canceling statement due to statement timeout",
+    ))
+
+
+def _execute_sql(engine, sql: str, dialect: str, row_limit: int, timeout_ms: int):
+    """
+    Execute sql against engine with LIMIT injection, timeout enforcement,
+    and value serialisation. Returns (sql_executed, rows, results_truncated).
+    """
+    from sqlalchemy import text
+    import datetime
+    from decimal import Decimal
+
+    sql_to_execute, limit_applied = _ensure_result_limit(sql, dialect, row_limit)
+
+    try:
+        with engine.connect() as conn:
+            timeout_applied = False
+            try:
+                _apply_query_timeout(conn, dialect, timeout_ms)
+                timeout_applied = True
+            except Exception as e:
+                logger.warning(f"[Exec] Could not apply query timeout for {dialect}: {e}")
+
+            try:
+                res = conn.execute(text(sql_to_execute))
+                if not res.returns_rows:
+                    return sql_to_execute, [], False
+
+                cols = list(res.keys())
+                db_rows = res.fetchmany(row_limit + 1)
+            finally:
+                if timeout_applied:
+                    try:
+                        _reset_query_timeout(conn, dialect)
+                    except Exception as e:
+                        logger.warning(f"[Exec] Could not reset query timeout for {dialect}: {e}")
+
+    except QueryTimeoutError:
+        raise
+    except Exception as e:
+        if _is_timeout_error(e):
+            raise QueryTimeoutError(f"Query timed out after {timeout_ms} ms") from e
+        raise
+
+    def serialise_value(val):
+        if isinstance(val, (datetime.datetime, datetime.date)):
+            return val.isoformat()
+        if isinstance(val, Decimal):
+            return float(val)
+        if isinstance(val, bytes):
+            return val.decode("utf-8", errors="replace")
+        return val
+
+    results_truncated = limit_applied or len(db_rows) > row_limit
+    result = [
+        {col: serialise_value(row[i]) for i, col in enumerate(cols)}
+        for row in db_rows[:row_limit]
+    ]
+    return sql_to_execute, result, results_truncated
+
+
 # ─── Core result type ─────────────────────────────────────────────────────────
 
 @dataclass
@@ -265,6 +384,7 @@ class QueryResult:
     error: str = None
     retries: int = 0
     healing_log: List[str] = field(default_factory=list)
+    results_truncated: bool = False
 
 
 # ─── Critic-executor loop ─────────────────────────────────────────────────────
@@ -283,12 +403,15 @@ def execute_with_healing(
     Generate → validate → execute, with up to MAX_RETRIES self-healing retries.
     """
     from langchain_core.messages import HumanMessage, SystemMessage
+    from config import cfg
 
     prev_sql = None
     error = None
     strategy = None
     log = []
-    current_schema = schema  # may be replaced with tighter schema on column errors
+    current_schema = schema
+    result_row_limit  = max(1, int(getattr(cfg, "QUERY_RESULT_ROW_LIMIT", 100)))
+    db_query_timeout_ms = max(1, int(getattr(cfg, "DB_QUERY_TIMEOUT_MS", 5000)))
 
     for attempt in range(MAX_RETRIES + 1):
         # ── 1. Build prompt ───────────────────────────────────────────────
@@ -329,44 +452,18 @@ def execute_with_healing(
 
         # ── 4. Execute ────────────────────────────────────────────────────
         try:
-            from sqlalchemy import text
-            with engine.connect() as conn:
-                res = conn.execute(text(sql))
-                if res.returns_rows:
-                    cols = list(res.keys())
-                    db_rows = res.fetchall()
+            sql_executed, result, results_truncated = _execute_sql(
+                engine, sql, dialect, result_row_limit, db_query_timeout_ms
+            )
+            log.append(f"[{attempt+1}] Executed OK" + (" (results truncated)" if results_truncated else ""))
 
-                    # Helper for custom value serialization
-                    import datetime
-                    from decimal import Decimal
-                    def serialise_value(val):
-                        if isinstance(val, (datetime.datetime, datetime.date)):
-                            return val.isoformat()
-                        if isinstance(val, Decimal):
-                            return float(val)
-                        if isinstance(val, bytes):
-                            return val.decode('utf-8', errors='replace')
-                        return val
+            return QueryResult(True, sql_executed, rows=result, retries=attempt,
+                               healing_log=log, results_truncated=results_truncated)
 
-                    result = []
-                    for row in db_rows:
-                        row_dict = {}
-                        for i, col in enumerate(cols):
-                            row_dict[col] = serialise_value(row[i])
-                        result.append(row_dict)
-                else:
-                    result = []
-
-            log.append(f"[{attempt+1}] Executed OK")
-
-            if not result and attempt < MAX_RETRIES:
-                strategy = _build_healing_strategy("", empty_result=True)
-                log.append(f"[{attempt+1}] Empty result — retrying with looser filters")
-                error = "Query returned no rows."
-                prev_sql = sql
-                continue
-
-            return QueryResult(True, sql, rows=result, retries=attempt, healing_log=log)
+        except QueryTimeoutError as te:
+            err_str = str(te)
+            log.append(f"[{attempt+1}] Timeout: {err_str}")
+            return QueryResult(False, sql, error=err_str, retries=attempt, healing_log=log)
 
         except Exception as db_err:
             err_str = str(db_err)
@@ -497,14 +594,15 @@ def run_nl_query(
     )
 
     return {
-        "success":       qr.success,
-        "sql":           qr.sql or None,
-        "results":       qr.rows,
-        "explanation":   explain_result(llm, question, qr.sql, qr.rows) if qr.success else None,
-        "error":         qr.error,
-        "retries":       qr.retries,
-        "healing_log":   qr.healing_log,
-        "schema_source": schema_source,
+        "success":           qr.success,
+        "sql":               qr.sql or None,
+        "results":           qr.rows,
+        "explanation":       explain_result(llm, question, qr.sql, qr.rows) if qr.success else None,
+        "error":             qr.error,
+        "retries":           qr.retries,
+        "healing_log":       qr.healing_log,
+        "schema_source":     schema_source,
+        "results_truncated": qr.results_truncated,
     }
 
 

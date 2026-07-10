@@ -57,6 +57,8 @@ class Config:
     MAX_QUESTION_LENGTH: int = 2000
     MAX_ALIAS_LENGTH: int = 80
     REQUEST_TIMEOUT: int = 120       # seconds before LLM call is abandoned
+    QUERY_RESULT_ROW_LIMIT: int = 100
+    DB_QUERY_TIMEOUT_MS: int = 5000
 
     # ── Environment ───────────────────────────────────────────────────────
     ENV: str = "development"
@@ -118,6 +120,8 @@ class Config:
         # Lengths
         c.MAX_QUESTION_LENGTH = int(os.getenv("MAX_QUESTION_LENGTH", "2000"))
         c.MAX_ALIAS_LENGTH    = int(os.getenv("MAX_ALIAS_LENGTH",    "80"))
+        c.QUERY_RESULT_ROW_LIMIT = int(os.getenv("QUERY_RESULT_ROW_LIMIT", "100"))
+        c.DB_QUERY_TIMEOUT_MS = int(os.getenv("DB_QUERY_TIMEOUT_MS", "5000"))
 
         return c
 
