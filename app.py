@@ -127,6 +127,59 @@ def create_app() -> Flask:
         model        = data.get("model") or session.get("model")
         return get_llm(user_api_key=user_api_key, user_provider=provider, user_model=model)
 
+    def _optional_text(data, field, max_len=4000):
+        if field not in data or data.get(field) is None:
+            return None, None
+        value = data.get(field)
+        if not isinstance(value, str):
+            return None, f"{field} must be a string"
+        value = value.strip()
+        if not value:
+            return None, None
+        if len(value) > max_len:
+            return None, f"{field} must be at most {max_len} characters"
+        return value, None
+
+    def _optional_glossary(data):
+        if "glossary" not in data or data.get("glossary") is None:
+            return None, None
+        glossary = data.get("glossary")
+        if not isinstance(glossary, dict):
+            return None, "glossary must be an object"
+        cleaned = {}
+        for key, value in glossary.items():
+            if not isinstance(key, str) or not isinstance(value, str):
+                return None, "glossary keys and values must be strings"
+            key = key.strip()
+            value = value.strip()
+            if key and value:
+                cleaned[key] = value
+        return cleaned or None, None
+
+    def _optional_table_list(data, field):
+        if field not in data or data.get(field) is None:
+            return None, None
+        values = data.get(field)
+        if not isinstance(values, list):
+            return None, f"{field} must be an array of strings"
+        cleaned = []
+        for value in values:
+            if not isinstance(value, str):
+                return None, f"{field} must contain only strings"
+            value = value.strip()
+            if value:
+                cleaned.append(value)
+        return cleaned or None, None
+
+    def _connection_profile_response(conn):
+        return {
+            "description": conn.description,
+            "business_context": conn.business_context,
+            "glossary": conn.glossary_json,
+            "important_tables": conn.important_tables_json,
+            "ignored_tables": conn.ignored_tables_json,
+        }
+
     # ─── Health / budget ──────────────────────────────────────────────────
 
     @app.route("/health")
@@ -178,7 +231,7 @@ def create_app() -> Flask:
         """
         Save a new DB connection for the current user.
 
-        Body: { "alias": "my-db", "uri": "postgresql://..." }
+        Body: { "alias": "my-db", "uri": "postgresql://...", ...optional profile fields }
         Optionally test the connection before saving.
         """
         data  = request.get_json() or {}
@@ -190,6 +243,22 @@ def create_app() -> Flask:
 
         if len(alias) > cfg.MAX_ALIAS_LENGTH:
             return jsonify({"error": f"alias must be at most {cfg.MAX_ALIAS_LENGTH} characters"}), 400
+
+        description, err = _optional_text(data, "description")
+        if err:
+            return jsonify({"error": err}), 400
+        business_context, err = _optional_text(data, "business_context")
+        if err:
+            return jsonify({"error": err}), 400
+        glossary, err = _optional_glossary(data)
+        if err:
+            return jsonify({"error": err}), 400
+        important_tables, err = _optional_table_list(data, "important_tables")
+        if err:
+            return jsonify({"error": err}), 400
+        ignored_tables, err = _optional_table_list(data, "ignored_tables")
+        if err:
+            return jsonify({"error": err}), 400
 
         # Test connection
         try:
@@ -204,15 +273,22 @@ def create_app() -> Flask:
             alias=alias,
             dialect=dialect,
             uri_encrypted=encrypt(uri),
+            description=description,
+            business_context=business_context,
+            glossary_json=glossary,
+            important_tables_json=important_tables,
+            ignored_tables_json=ignored_tables,
         )
         s.add(conn)
         s.commit()
         logger.info(f"[Connection] Created id={conn.id} alias='{alias}' dialect={dialect} user={current_user.id}")
-        return jsonify({
+        response = {
             "id":      conn.id,
             "alias":   conn.alias,
             "dialect": conn.dialect,
-        }), 201
+            **_connection_profile_response(conn),
+        }
+        return jsonify(response), 201
 
     @app.route("/connections", methods=["GET"])
     @login_required
@@ -247,7 +323,8 @@ def create_app() -> Flask:
         return jsonify([
             {"id": c.id, "alias": c.alias, "dialect": c.dialect,
              "has_memory": c.schema_memory_json is not None,
-             "created_at": c.created_at.isoformat() if c.created_at else None}
+             "created_at": c.created_at.isoformat() if c.created_at else None,
+             **_connection_profile_response(c)}
             for c in rows
         ])
 
@@ -308,9 +385,11 @@ def create_app() -> Flask:
                 return jsonify({"error": "Connection not found"}), 404
             uri     = decrypt(saved.uri_encrypted)
             dialect = saved.dialect
+            profile_connection = saved
         elif data.get("uri"):
             uri     = data["uri"].strip()
             dialect = detect_dialect(uri)
+            profile_connection = None
         else:
             return jsonify({"error": "Provide connection_id or uri"}), 400
 
@@ -360,6 +439,7 @@ def create_app() -> Flask:
                 uri=uri,
                 conn_id=conn_id,
                 app_db_session=s,
+                profile=profile_connection,
             )
         except Exception as e:
             logger.exception("run_nl_query raised")

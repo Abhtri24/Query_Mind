@@ -14,7 +14,7 @@ import logging
 from datetime import datetime, timezone
 
 from flask_login import UserMixin
-from sqlalchemy import (Column, DateTime, Float, ForeignKey, Integer,
+from sqlalchemy import (JSON, Column, DateTime, Float, ForeignKey, Integer,
                         String, Text, create_engine)
 from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
 from sqlalchemy.sql import func
@@ -57,6 +57,11 @@ class DBConnection(Base):
     alias           = Column(String(120), nullable=False)
     dialect         = Column(String(20),  nullable=False)
     uri_encrypted   = Column(Text, nullable=False)   # Fernet-encrypted URI
+    description     = Column(Text, nullable=True)
+    business_context = Column(Text, nullable=True)
+    glossary_json   = Column(JSON, nullable=True)
+    important_tables_json = Column(JSON, nullable=True)
+    ignored_tables_json = Column(JSON, nullable=True)
     schema_memory_json = Column(Text, nullable=True) # JSON blob, replaces filesystem
     memory_explored_at = Column(DateTime(timezone=True), nullable=True)
     created_at      = Column(DateTime(timezone=True), server_default=func.now())

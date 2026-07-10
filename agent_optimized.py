@@ -196,6 +196,7 @@ def _build_prompt(
     previous_sql: str = None,
     error: str = None,
     strategy: str = None,
+    profile_context: str = None,
 ) -> str:
     retry_block = ""
     if previous_sql and error:
@@ -207,9 +208,11 @@ def _build_prompt(
         )
 
     dialect_note = _DIALECT_NOTES.get(dialect, "Use standard SQL.")
+    profile_block = f"\nDATABASE PROFILE:\n{profile_context}\n" if profile_context else ""
 
     return f"""You are an expert {dialect.upper()} SQL assistant for a generic database query tool.
 {retry_block}
+{profile_block}
 DATABASE SCHEMA:
 {schema}
 
@@ -274,6 +277,7 @@ def execute_with_healing(
     schema: str,
     dialect: str = "mysql",
     chat_history: list = None,
+    profile_context: str = None,
 ) -> QueryResult:
     """
     Generate → validate → execute, with up to MAX_RETRIES self-healing retries.
@@ -288,7 +292,7 @@ def execute_with_healing(
 
     for attempt in range(MAX_RETRIES + 1):
         # ── 1. Build prompt ───────────────────────────────────────────────
-        system_prompt = _build_prompt(current_schema, dialect, prev_sql, error, strategy)
+        system_prompt = _build_prompt(current_schema, dialect, prev_sql, error, strategy, profile_context)
         messages = [SystemMessage(content=system_prompt)]
         if chat_history:
             messages.extend(chat_history[-4:])  # last 2 turns of context
@@ -419,6 +423,7 @@ def run_nl_query(
     memory=None,              # pre-loaded MemoryData (avoids re-loading per turn)
     conn_id: int = None,      # DB connection ID for schema memory persistence
     app_db_session=None,      # app metadata DB session for schema memory persistence
+    profile=None,             # optional DBConnection/business profile
 ) -> Dict:
     """
     Convert a natural language question to SQL, execute it, explain the result.
@@ -442,6 +447,14 @@ def run_nl_query(
     """
     dialect = dialect or "mysql"
     schema_source = "live"
+    profile_context = ""
+    if profile is not None:
+        try:
+            from profile_context import build_profile_context
+            profile_context = build_profile_context(profile)
+        except Exception as e:
+            logger.warning(f"[Profile] Could not build profile context: {e}")
+            profile_context = ""
 
     # ── Try schema memory first ───────────────────────────────────────────
     if memory is None and uri:
@@ -480,6 +493,7 @@ def run_nl_query(
         schema=schema,
         dialect=dialect,
         chat_history=chat_history,
+        profile_context=profile_context,
     )
 
     return {

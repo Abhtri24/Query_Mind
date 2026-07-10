@@ -18,6 +18,31 @@ from crypto import encrypt, is_encrypted
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("migration")
 
+
+PROFILE_COLUMNS = {
+    "description": "TEXT",
+    "business_context": "TEXT",
+    "glossary_json": "JSON",
+    "important_tables_json": "JSON",
+    "ignored_tables_json": "JSON",
+}
+
+
+def _ensure_profile_columns(engine):
+    inspector = inspect(engine)
+    columns = {c["name"] for c in inspector.get_columns("nl2db_connections")}
+    missing = [name for name in PROFILE_COLUMNS if name not in columns]
+    if not missing:
+        logger.info("Database profile columns already exist.")
+        return
+
+    with engine.begin() as conn:
+        for name in missing:
+            col_type = PROFILE_COLUMNS[name]
+            logger.info(f"Adding missing database profile column: {name}")
+            conn.execute(text(f"ALTER TABLE nl2db_connections ADD COLUMN {name} {col_type}"))
+
+
 def run_migration():
     engine = get_engine()
     inspector = inspect(engine)
@@ -113,6 +138,8 @@ def run_migration():
         # Just in case columns were missing but 'uri' wasn't there
         from models import create_tables
         create_tables()
+
+    _ensure_profile_columns(engine)
         
     logger.info("Checking for any unencrypted connection strings in 'uri_encrypted'...")
     with Session(engine) as session:
