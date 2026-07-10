@@ -4,12 +4,10 @@ schema_memory.py
 Persistent schema memory — stored in the nl2db_connections.schema_memory_json
 column (survives deploys, works on Render/Railway ephemeral filesystems).
 
-Falls back to filesystem cache for local dev if DB column is unavailable.
-
-Public API (unchanged from previous version):
-    load_or_explore(uri, db, engine, llm, dialect, conn_id, app_db_session)
-    explore_and_save(uri, db, engine, llm, dialect, conn_id, app_db_session)
-    get_schema_context(memory, question)
+Public API:
+    load_or_explore(uri, db, engine, llm, dialect, conn_id, app_db_session, ignored_tables)
+    explore_and_save(uri, db, engine, llm, dialect, conn_id, app_db_session, ignored_tables)
+    get_schema_context(memory, question, ignored_tables)
     memory_summary_for_api(memory)
 """
 
@@ -127,13 +125,44 @@ def delete_memory_from_db(conn_id: int, app_db_session) -> None:
         app_db_session.rollback()
 
 
+# ─── Identifier quoting ───────────────────────────────────────────────────────
+
+def _quote_identifier(name: str, dialect: str) -> str:
+    """Return a safely quoted identifier for the given dialect."""
+    normalized = (dialect or "").lower()
+    if normalized == "mysql":
+        escaped = name.replace("`", "``")
+        return f"`{escaped}`"
+    else:
+        # PostgreSQL, SQLite, and standard SQL use double-quotes
+        escaped = name.replace('"', '""')
+        return f'"{escaped}"'
+
+
 # ─── Introspection ────────────────────────────────────────────────────────────
 
-def _introspect(db, engine, dialect: str) -> List[TableInfo]:
+def _introspect(
+    db,
+    engine,
+    dialect: str,
+    ignored_tables: Optional[List[str]] = None,
+) -> List[TableInfo]:
     from sqlalchemy import inspect as sa_inspect, text
 
+    ignored_lower = {t.lower() for t in (ignored_tables or [])}
+
     inspector = sa_inspect(engine)
-    table_names = inspector.get_table_names()[:MAX_TABLES]
+    all_table_names = inspector.get_table_names()
+    table_names = [
+        t for t in all_table_names
+        if t.lower() not in ignored_lower
+    ][:MAX_TABLES]
+
+    if ignored_lower:
+        skipped = [t for t in all_table_names if t.lower() in ignored_lower]
+        if skipped:
+            logger.info(f"[Memory] Skipping ignored tables during introspection: {skipped}")
+
     tables: List[TableInfo] = []
 
     with engine.connect() as conn:
@@ -144,6 +173,7 @@ def _introspect(db, engine, dialect: str) -> List[TableInfo]:
                 raw_cols = []
 
             columns: List[ColumnInfo] = []
+            qt = _quote_identifier(tname, dialect)
             for col in raw_cols[:MAX_COLS_SHOWN]:
                 col_info = ColumnInfo(
                     name=col["name"],
@@ -151,8 +181,12 @@ def _introspect(db, engine, dialect: str) -> List[TableInfo]:
                     nullable=col.get("nullable", True),
                 )
                 try:
-                    # Quote column and table names safely
-                    q = text(f'SELECT "{col["name"]}" FROM "{tname}" WHERE "{col["name"]}" IS NOT NULL LIMIT {MAX_SAMPLE_ROWS}')
+                    qc = _quote_identifier(col["name"], dialect)
+                    q = text(
+                        f"SELECT {qc} FROM {qt} "
+                        f"WHERE {qc} IS NOT NULL "
+                        f"LIMIT {MAX_SAMPLE_ROWS}"
+                    )
                     rows = conn.execute(q).fetchall()
                     col_info.sample_values = [str(r[0])[:80] for r in rows]
                 except Exception:
@@ -161,7 +195,7 @@ def _introspect(db, engine, dialect: str) -> List[TableInfo]:
 
             row_count = 0
             try:
-                row_count = conn.execute(text(f'SELECT COUNT(*) FROM "{tname}"')).scalar() or 0
+                row_count = conn.execute(text(f"SELECT COUNT(*) FROM {qt}")).scalar() or 0
             except Exception:
                 pass
 
@@ -187,13 +221,24 @@ def _build_exploration_prompt(tables: List[TableInfo], dialect: str) -> str:
     lines += [
         "Respond ONLY with valid JSON — no markdown, no prose outside the JSON.",
         "",
-        'Required shape:',
-        '{',
+        "Required shape:",
+        "{",
         '  "db_summary": "One paragraph: what is this database about?",',
         '  "tables": [{"name": "<table>", "description": "One sentence."}, ...]',
-        '}',
+        "}",
     ]
     return "\n".join(lines)
+
+
+def _strip_llm_json(raw: str) -> str:
+    """Strip markdown code fences that LLMs sometimes wrap JSON in."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        # Remove opening fence (```json or ```)
+        raw = raw[raw.index("\n") + 1:] if "\n" in raw else raw[3:]
+    if raw.endswith("```"):
+        raw = raw[:-3]
+    return raw.strip()
 
 
 def _run_llm_summary(llm, tables: List[TableInfo], dialect: str) -> tuple[str, Dict[str, str]]:
@@ -203,8 +248,7 @@ def _run_llm_summary(llm, tables: List[TableInfo], dialect: str) -> tuple[str, D
     try:
         response = llm.invoke([HumanMessage(content=prompt)])
         raw = response.content if hasattr(response, "content") else str(response)
-        raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-        parsed = json.loads(raw)
+        parsed = json.loads(_strip_llm_json(raw))
         db_summary = parsed.get("db_summary", "")
         table_descs = {t["name"]: t.get("description", "") for t in parsed.get("tables", [])}
         return db_summary, table_descs
@@ -223,9 +267,10 @@ def explore_and_save(
     dialect: str = "mysql",
     conn_id: int = None,
     app_db_session=None,
+    ignored_tables: Optional[List[str]] = None,
 ) -> MemoryData:
     logger.info(f"[Memory] Exploring database (dialect={dialect})")
-    tables = _introspect(db, engine, dialect)
+    tables = _introspect(db, engine, dialect, ignored_tables=ignored_tables)
     db_summary, table_descs = _run_llm_summary(llm, tables, dialect)
     for t in tables:
         t.description = table_descs.get(t.name, "")
@@ -248,19 +293,36 @@ def load_or_explore(
     dialect: str = "mysql",
     conn_id: int = None,
     app_db_session=None,
+    ignored_tables: Optional[List[str]] = None,
 ) -> MemoryData:
     cached = _load_from_db(conn_id, app_db_session)
     if cached:
         logger.debug(f"[Memory] Cache hit for conn_id={conn_id}")
         return cached
     logger.info("[Memory] No cache — running first-connect exploration")
-    return explore_and_save(uri, db, engine, llm, dialect, conn_id, app_db_session)
+    return explore_and_save(
+        uri, db, engine, llm, dialect, conn_id, app_db_session,
+        ignored_tables=ignored_tables,
+    )
 
 
-def get_schema_context(memory: MemoryData, question: str, max_tables: int = 12) -> str:
+def get_schema_context(
+    memory: MemoryData,
+    question: str,
+    max_tables: int = 12,
+    ignored_tables: Optional[List[str]] = None,
+) -> str:
+    ignored_lower = {t.lower() for t in (ignored_tables or [])}
+
+    # Filter ignored tables before scoring
+    candidate_tables = [
+        t for t in memory.tables
+        if t.name.lower() not in ignored_lower
+    ]
+
     q = question.lower()
     scored: list[tuple[int, TableInfo]] = []
-    for t in memory.tables:
+    for t in candidate_tables:
         score = 0
         tokens = t.name.lower().replace("_", " ").split()
         for tok in tokens:
@@ -275,9 +337,12 @@ def get_schema_context(memory: MemoryData, question: str, max_tables: int = 12) 
         scored.append((score, t))
 
     scored.sort(key=lambda x: (-x[0], x[1].name))
-    selected = [t for _, t in scored[:max_tables]]
+
+    # If nothing scored, fall back to highest row-count tables
     if not any(s > 0 for s, _ in scored):
-        selected = [t for _, t in sorted(scored, key=lambda x: -x[1].row_count)[:max_tables]]
+        selected = [t for t in sorted(candidate_tables, key=lambda t: -t.row_count)][:max_tables]
+    else:
+        selected = [t for _, t in scored[:max_tables]]
 
     parts = [
         f"DATABASE OVERVIEW: {memory.db_summary}",
