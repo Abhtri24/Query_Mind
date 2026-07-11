@@ -480,7 +480,39 @@ Respond ONLY with valid JSON, no prose, no markdown fences:
         logger.debug(f"[Planner] Skipped (error: {e}) — using single-step passthrough")
         return QueryPlan(steps=[question], needs_merge=False, rationale="passthrough")
 
+def summarise_rows_for_llm(rows: list, max_chars: int = 3000) -> str:
+    """
+    Compress query results into a token-efficient summary before sending to LLM.
+    Small results get a compact table. Large results get stats + a sample.
+    """
+    if not rows:
+        return "No rows returned."
 
+    n    = len(rows)
+    cols = list(rows[0].keys())
+
+    if n <= 20:
+        header = " | ".join(cols)
+        lines  = [header, "-" * len(header)]
+        for row in rows:
+            lines.append(" | ".join(str(row.get(c, ""))[:30] for c in cols))
+        return "\n".join(lines)
+
+    # Large result: numeric stats + 5-row sample
+    lines = [f"{n} rows. Columns: {', '.join(cols)}", ""]
+    for col in cols:
+        vals = [row[col] for row in rows if isinstance(row.get(col), (int, float))]
+        if vals:
+            lines.append(
+                f"{col}: min={min(vals):.2f}  max={max(vals):.2f}  "
+                f"avg={sum(vals)/len(vals):.2f}  sum={sum(vals):.2f}"
+            )
+    lines.append("\nSample (first 5 rows):")
+    for row in rows[:5]:
+        lines.append("  " + " | ".join(f"{k}={str(v)[:25]}" for k, v in row.items()))
+
+    result = "\n".join(lines)
+    return result[:max_chars]
 # ─── Agentic layer 3: Result interpreter ─────────────────────────────────────
 
 def interpret_results(
@@ -502,7 +534,7 @@ def interpret_results(
         results_block += (
             f"\nStep {i}: {step}\n"
             f"SQL: {res['sql']}\n"
-            f"Result{trunc}: {str(res['rows'])[:1000]}\n"
+            f"Result{trunc}:\n{summarise_rows_for_llm(res['rows'])}\n"
         )
 
     prompt = (

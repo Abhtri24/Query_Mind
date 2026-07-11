@@ -437,13 +437,23 @@ def get_schema_context(
         "",
         "RELEVANT TABLES:",
     ]
+    TOKEN_BUDGET = 3000   # ~12k chars ≈ 3k tokens, safe for any model
+    char_budget  = TOKEN_BUDGET * 4
+    used         = 0
+
     for t in selected:
-        desc = f"  — {t.description}" if t.description else ""
-        parts.append(f"\nTABLE {t.name} ({t.row_count:,} rows){desc}")
+        desc  = f"  — {t.description}" if t.description else ""
+        block = [f"\nTABLE {t.name} ({t.row_count:,} rows){desc}"]
         for col in t.columns:
             samples  = f"  e.g. {', '.join(repr(v) for v in col.sample_values[:2])}" if col.sample_values else ""
             nullable = "" if col.nullable else " NOT NULL"
-            parts.append(f"  {col.name}  {col.type}{nullable}{samples}")
+            block.append(f"  {col.name}  {col.type}{nullable}{samples}")
+        chunk = "\n".join(block)
+        if used + len(chunk) > char_budget:
+            parts.append(f"\n-- {len(selected) - selected.index(t)} more tables omitted (token budget) --")
+            break
+        parts.append(chunk)
+        used += len(chunk)
 
     return "\n".join(parts)
 

@@ -14,6 +14,7 @@ Endpoint map:
     DELETE /connections/<id>   remove a connection
 
     POST /query                run a natural language query
+    POST /query/stream         SSE streaming version of /query
     GET  /sessions             list chat sessions
     GET  /sessions/<id>        get full chat history for a session
     DELETE /sessions/<id>      delete a session
@@ -179,14 +180,62 @@ def create_app() -> Flask:
                 cleaned.append(value)
         return cleaned or None, None
 
+    def _query_cache_get(conn_id, question):
+        """Return (cached_result, cache_key). cached_result is None on miss or no Redis."""
+        if not cfg.REDIS_URL:
+            return None, None
+        try:
+            import redis
+            import hashlib
+            import json
+            r   = redis.from_url(cfg.REDIS_URL, socket_connect_timeout=1)
+            key = "qc:" + hashlib.sha256(
+                f"{conn_id}:{question.lower().strip()}".encode()
+            ).hexdigest()[:16]
+            val = r.get(key)
+            return (json.loads(val), key) if val else (None, key)
+        except Exception:
+            return None, None
+
+    def _query_cache_set(key, result):
+        """Store a successful query result for 5 minutes. Silent on failure."""
+        if not key or not cfg.REDIS_URL:
+            return
+        try:
+            import redis
+            import json
+            r = redis.from_url(cfg.REDIS_URL, socket_connect_timeout=1)
+            r.setex(key, 300, json.dumps(result, default=str))
+        except Exception:
+            pass
+
     def _connection_profile_response(conn):
         return {
-            "description":     conn.description,
+            "description":      conn.description,
             "business_context": conn.business_context,
-            "glossary":        conn.glossary_json,
+            "glossary":         conn.glossary_json,
             "important_tables": conn.important_tables_json,
-            "ignored_tables":  conn.ignored_tables_json,
+            "ignored_tables":   conn.ignored_tables_json,
         }
+
+    def _resolve_connection(data, s):
+        """
+        Shared logic: resolve URI + dialect + profile from request data.
+        Returns (uri, dialect, profile_connection, conn_id, error_response).
+        error_response is non-None when resolution failed.
+        """
+        conn_id = data.get("connection_id")
+        if conn_id:
+            saved = s.query(DBConnection).filter_by(
+                id=conn_id, user_id=current_user.id
+            ).first()
+            if not saved:
+                return None, None, None, None, (jsonify({"error": "Connection not found"}), 404)
+            return decrypt(saved.uri_encrypted), saved.dialect, saved, conn_id, None
+        elif data.get("uri"):
+            uri = data["uri"].strip()
+            return uri, detect_dialect(uri), None, None, None
+        return None, None, None, None, (jsonify({"error": "Provide connection_id or uri"}), 400)
 
     # ─── Health / budget ──────────────────────────────────────────────────
 
@@ -243,15 +292,15 @@ def create_app() -> Flask:
         if len(alias) > cfg.MAX_ALIAS_LENGTH:
             return jsonify({"error": f"alias must be at most {cfg.MAX_ALIAS_LENGTH} characters"}), 400
 
-        description,     err = _optional_text(data, "description");      
+        description,      err = _optional_text(data, "description")
         if err: return jsonify({"error": err}), 400
-        business_context,err = _optional_text(data, "business_context"); 
+        business_context, err = _optional_text(data, "business_context")
         if err: return jsonify({"error": err}), 400
-        glossary,        err = _optional_glossary(data);                 
+        glossary,         err = _optional_glossary(data)
         if err: return jsonify({"error": err}), 400
-        important_tables,err = _optional_table_list(data, "important_tables"); 
+        important_tables, err = _optional_table_list(data, "important_tables")
         if err: return jsonify({"error": err}), 400
-        ignored_tables,  err = _optional_table_list(data, "ignored_tables");   
+        ignored_tables,   err = _optional_table_list(data, "ignored_tables")
         if err: return jsonify({"error": err}), 400
 
         try:
@@ -359,22 +408,10 @@ def create_app() -> Flask:
             return jsonify({"error": f"question must be at most {cfg.MAX_QUESTION_LENGTH} characters"}), 400
 
         # ── Resolve DB connection ──────────────────────────────────────
-        s       = _app_db()
-        conn_id = data.get("connection_id")
-
-        if conn_id:
-            saved = s.query(DBConnection).filter_by(id=conn_id, user_id=current_user.id).first()
-            if not saved:
-                return jsonify({"error": "Connection not found"}), 404
-            uri                = decrypt(saved.uri_encrypted)
-            dialect            = saved.dialect
-            profile_connection = saved
-        elif data.get("uri"):
-            uri                = data["uri"].strip()
-            dialect            = detect_dialect(uri)
-            profile_connection = None
-        else:
-            return jsonify({"error": "Provide connection_id or uri"}), 400
+        s = _app_db()
+        uri, dialect, profile_connection, conn_id, err = _resolve_connection(data, s)
+        if err:
+            return err
 
         try:
             db, engine = get_db_from_uri(uri)
@@ -386,6 +423,12 @@ def create_app() -> Flask:
             llm = _get_llm_for_request()
         except RuntimeError as e:
             return jsonify({"error": str(e)}), 402
+
+        # ── Cache check ───────────────────────────────────────────────
+        cached_result, cache_key = _query_cache_get(conn_id, question)
+        if cached_result:
+            logger.info(f"[Cache] Hit for conn={conn_id}")
+            return jsonify({**cached_result, "cached": True})
 
         # ── Session tracking ──────────────────────────────────────────
         if "chat_session_id" not in session:
@@ -424,7 +467,23 @@ def create_app() -> Flask:
             logger.exception("run_nl_query raised")
             return jsonify({"error": str(e)}), 500
 
-        elapsed = time.time() - start
+        elapsed    = time.time() - start
+        serialised = result.get("results")  # already list/dict; str for db.run() fallback
+
+        # ── Cache successful result ────────────────────────────────────
+        if result["success"]:
+            _query_cache_set(cache_key, {
+                "success":           result["success"],
+                "sql":               result.get("sql"),
+                "results":           serialised,
+                "explanation":       result.get("explanation"),
+                "error":             None,
+                "retries":           result.get("retries", 0),
+                "healing_log":       result.get("healing_log", []),
+                "schema_source":     result.get("schema_source", "live"),
+                "results_truncated": result.get("results_truncated", False),
+                "plan":              result.get("plan", []),
+            })
 
         # ── Persist message ───────────────────────────────────────────
         msg = ChatMessage(
@@ -447,22 +506,197 @@ def create_app() -> Flask:
             f"success={result['success']} time={elapsed:.2f}s retries={result.get('retries', 0)}"
         )
 
-        raw_results = result.get("results")
-        serialised  = raw_results  # already list/dict from executor; str from db.run() fallback
-
         return jsonify({
-            "success":           result["success"],
-            "sql":               result.get("sql"),
-            "results":           serialised,
-            "explanation":       result.get("explanation"),
-            "error":             result.get("error"),
-            "retries":           result.get("retries", 0),
-            "healing_log":       result.get("healing_log", []),
-            "response_time_s":   round(elapsed, 3),
-            "message_id":        msg.id,
-            "schema_source":     result.get("schema_source", "live"),
-            "results_truncated": result.get("results_truncated", False),  # ← FIX
+            "success":             result["success"],
+            "sql":                 result.get("sql"),
+            "results":             serialised,
+            "explanation":         result.get("explanation"),
+            "error":               result.get("error"),
+            "retries":             result.get("retries", 0),
+            "healing_log":         result.get("healing_log", []),
+            "response_time_s":     round(elapsed, 3),
+            "message_id":          msg.id,
+            "schema_source":       result.get("schema_source", "live"),
+            "results_truncated":   result.get("results_truncated", False),
+            "clarification_needed": result.get("clarification_needed"),
+            "plan":                result.get("plan", []),
+            "cached":              False,
         })
+
+    # ─── Streaming query endpoint (SSE) ───────────────────────────────────
+
+    @app.route("/query/stream", methods=["POST"])
+    @login_required
+    @limiter.limit(lambda: cfg.RATE_LIMIT_QUERY)
+    def query_stream():
+        """
+        Server-Sent Events version of /query.
+        Emits progress events while the agent runs so the client never
+        stares at a blank screen for 20+ seconds.
+
+        Event shapes (all JSON on the `data:` line):
+            {"status": "checking",      "message": "..."}
+            {"status": "clarification", "question": "..."}
+            {"status": "planning",      "message": "..."}
+            {"status": "planned",       "steps": [...]}
+            {"status": "executing",     "step": 1, "total": 2, "message": "..."}
+            {"status": "interpreting",  "message": "..."}
+            {"status": "done",          ...all /query fields...}
+            {"status": "error",         "error": "..."}
+        """
+        import json
+        from flask import Response, stream_with_context
+        from agent_optimized import (check_clarification_needed, plan_query,
+                                     execute_with_healing, interpret_results)
+
+        data     = request.get_json() or {}
+        question = (data.get("question") or "").strip()
+
+        if not question:
+            return jsonify({"error": "question is required"}), 400
+        if len(question) > cfg.MAX_QUESTION_LENGTH:
+            return jsonify({"error": f"question must be at most {cfg.MAX_QUESTION_LENGTH} characters"}), 400
+
+        # ── Resolve connection & LLM (same as /query) ─────────────────
+        s = _app_db()
+        uri, dialect, profile_connection, conn_id, err = _resolve_connection(data, s)
+        if err:
+            return err
+
+        try:
+            db, engine = get_db_from_uri(uri)
+        except Exception as e:
+            return jsonify({"error": f"DB connection failed: {e}"}), 500
+
+        try:
+            llm = _get_llm_for_request()
+        except RuntimeError as e:
+            return jsonify({"error": str(e)}), 402
+
+        # ── Cache check before opening stream ─────────────────────────
+        cached_result, cache_key = _query_cache_get(conn_id, question)
+        if cached_result:
+            logger.info(f"[Cache] Stream hit for conn={conn_id}")
+            # Return a single-event SSE stream for consistency
+            payload = json.dumps({"status": "done", "cached": True, **cached_result})
+
+            def _cached_gen():
+                yield f"data: {payload}\n\n"
+
+            return Response(
+                stream_with_context(_cached_gen()),
+                mimetype="text/event-stream",
+                headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+            )
+
+        # ── Resolve schema ─────────────────────────────────────────────
+        schema_source = "live"
+        try:
+            memory = load_or_explore(
+                uri=uri, db=db, engine=engine, llm=llm,
+                dialect=dialect, conn_id=conn_id, app_db_session=s,
+            )
+            schema        = get_schema_context(memory, question)
+            schema_source = "memory"
+        except Exception:
+            from agent_optimized import get_all_table_names, pick_relevant_tables, fetch_schema
+            schema = fetch_schema(db, engine, pick_relevant_tables(
+                question, get_all_table_names(db, engine)
+            ))
+
+        def generate():
+            import json as _json
+
+            def emit(obj: dict) -> str:
+                return f"data: {_json.dumps(obj)}\n\n"
+
+            try:
+                # ── Step 1: clarification ──────────────────────────────
+                yield emit({"status": "checking", "message": "Analysing question..."})
+                clarification = check_clarification_needed(llm, question, schema)
+                if clarification:
+                    yield emit({"status": "clarification", "question": clarification})
+                    return
+
+                # ── Step 2: planning ───────────────────────────────────
+                yield emit({"status": "planning", "message": "Planning query..."})
+                plan = plan_query(llm, question, schema)
+                yield emit({"status": "planned", "steps": plan.steps})
+
+                # ── Step 3: execute each sub-query ─────────────────────
+                step_results  = []
+                total_retries = 0
+                all_logs      = []
+                last_error    = None
+
+                for i, sub_q in enumerate(plan.steps):
+                    yield emit({
+                        "status":  "executing",
+                        "step":    i + 1,
+                        "total":   len(plan.steps),
+                        "message": sub_q,
+                    })
+                    qr = execute_with_healing(
+                        question=sub_q, llm=llm, db=db, engine=engine,
+                        schema=schema, dialect=dialect,
+                        chat_history=None,  # history only for the non-streaming endpoint
+                    )
+                    all_logs.extend(qr.healing_log)
+                    total_retries += qr.retries
+
+                    if not qr.success:
+                        last_error = qr.error
+                        break
+
+                    step_results.append({
+                        "sql":       qr.sql,
+                        "rows":      qr.rows,
+                        "truncated": qr.results_truncated,
+                    })
+
+                if not step_results:
+                    yield emit({"status": "error", "error": last_error or "Query failed"})
+                    return
+
+                # ── Step 4: interpret ──────────────────────────────────
+                yield emit({"status": "interpreting", "message": "Summarising results..."})
+                explanation = interpret_results(
+                    llm, question,
+                    plan.steps[:len(step_results)],
+                    step_results,
+                )
+
+                last       = step_results[-1]
+                done_event = {
+                    "status":              "done",
+                    "success":             True,
+                    "sql":                 last["sql"],
+                    "results":             last["rows"],
+                    "explanation":         explanation,
+                    "error":               None,
+                    "retries":             total_retries,
+                    "healing_log":         all_logs,
+                    "schema_source":       schema_source,
+                    "results_truncated":   last["truncated"],
+                    "clarification_needed": None,
+                    "plan":                plan.steps,
+                    "cached":              False,
+                }
+                yield emit(done_event)
+
+                # ── Cache the successful result ─────────────────────────
+                _query_cache_set(cache_key, {k: v for k, v in done_event.items()
+                                             if k != "status"})
+
+            except Exception as exc:
+                logger.exception("query_stream generator error")
+                yield f"data: {_json.dumps({'status': 'error', 'error': str(exc)})}\n\n"
+
+        return Response(
+            stream_with_context(generate()),
+            mimetype="text/event-stream",
+            headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+        )
 
     # ─── Session history ──────────────────────────────────────────────────
 
@@ -558,7 +792,7 @@ def create_app() -> Flask:
 
         try:
             plaintext_uri = decrypt(conn.uri_encrypted)
-            db, engine = get_db_from_uri(plaintext_uri)
+            db, engine    = get_db_from_uri(plaintext_uri)
         except Exception as e:
             return jsonify({"error": f"DB connection failed: {e}"}), 500
 
@@ -645,7 +879,7 @@ def create_app() -> Flask:
 
         try:
             plaintext_uri = decrypt(conn.uri_encrypted)
-            _, engine = get_db_from_uri(plaintext_uri)
+            _, engine     = get_db_from_uri(plaintext_uri)
         except Exception as e:
             return jsonify({"error": f"DB connection failed: {e}"}), 500
 
