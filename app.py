@@ -20,17 +20,21 @@ Endpoint map:
 
     GET  /health               server status (DB, Redis, LLM)
     GET  /budget               hosted LLM token budget status
+
+    POST /connections/<id>/explore     trigger schema memory exploration
+    GET  /connections/<id>/memory      get cached schema memory
+    DELETE /connections/<id>/memory    delete cached schema memory
+    GET  /connections/<id>/sample      sample rows from a table (agentic tool)
 """
 
 import logging
 import os
-import threading
 import time
 import uuid
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 
-from flask import Flask, jsonify, request, session
+from flask import Flask, g, jsonify, request, session
 from flask_cors import CORS
 from flask_login import LoginManager, current_user, login_required
 from langchain_core.messages import AIMessage, HumanMessage
@@ -88,22 +92,29 @@ def create_app() -> Flask:
 
     @login_manager.user_loader
     def load_user(user_id):
-        s = get_db_session()
-        return s.get(User, int(user_id))
+        return _app_db().get(User, int(user_id))
 
     @login_manager.unauthorized_handler
     def unauthorized():
         return jsonify({"error": "Authentication required"}), 401
 
+    # ── DB session lifecycle ─────────────────────────────────────────────
+    # _app_db() caches one session per request in flask.g.
+    # teardown_appcontext closes it at the end of every request — no leaks.
+
     @app.teardown_appcontext
     def teardown_db_session(exception=None):
-        from flask import g
-        db_session = g.pop('db_session', None)
+        db_session = g.pop("db_session", None)
         if db_session is not None:
             try:
                 db_session.close()
             except Exception:
                 pass
+
+    def _app_db():
+        if "db_session" not in g:
+            g["db_session"] = get_db_session()
+        return g["db_session"]
 
     # ── Flask-Bcrypt ─────────────────────────────────────────────────────
     bcrypt.init_app(app)
@@ -115,9 +126,6 @@ def create_app() -> Flask:
     from history import _get_history, _append_history, _clear_history
 
     # ── Helpers ──────────────────────────────────────────────────────────
-
-    def _app_db():
-        return get_db_session()
 
     def _get_llm_for_request():
         """Picks LLM based on what the user sent in the request."""
@@ -173,33 +181,29 @@ def create_app() -> Flask:
 
     def _connection_profile_response(conn):
         return {
-            "description": conn.description,
+            "description":     conn.description,
             "business_context": conn.business_context,
-            "glossary": conn.glossary_json,
+            "glossary":        conn.glossary_json,
             "important_tables": conn.important_tables_json,
-            "ignored_tables": conn.ignored_tables_json,
+            "ignored_tables":  conn.ignored_tables_json,
         }
 
     # ─── Health / budget ──────────────────────────────────────────────────
 
     @app.route("/health")
     def health():
-        """
-        Health check — reports status of app DB, Redis, and LLM config.
-        """
+        """Health check — reports status of app DB, Redis, and LLM config."""
         status = {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
         checks = {}
 
-        # App database
         try:
-            s = _app_db()
-            s.execute(__import__("sqlalchemy").text("SELECT 1"))
+            import sqlalchemy
+            _app_db().execute(sqlalchemy.text("SELECT 1"))
             checks["app_db"] = "ok"
         except Exception as e:
             checks["app_db"] = f"error: {e}"
             status["status"] = "degraded"
 
-        # Redis
         if cfg.REDIS_URL:
             try:
                 import redis
@@ -212,10 +216,8 @@ def create_app() -> Flask:
         else:
             checks["redis"] = "not configured (using in-memory rate limiting)"
 
-        # LLM
         checks["llm_provider"] = cfg.HOSTED_LLM_PROVIDER
         checks["llm_key_set"]  = bool(cfg.HOSTED_LLM_API_KEY)
-
         status["checks"] = checks
         return jsonify(status)
 
@@ -230,9 +232,7 @@ def create_app() -> Flask:
     def add_connection():
         """
         Save a new DB connection for the current user.
-
         Body: { "alias": "my-db", "uri": "postgresql://...", ...optional profile fields }
-        Optionally test the connection before saving.
         """
         data  = request.get_json() or {}
         alias = (data.get("alias") or "").strip()
@@ -240,27 +240,20 @@ def create_app() -> Flask:
 
         if not alias or not uri:
             return jsonify({"error": "alias and uri are required"}), 400
-
         if len(alias) > cfg.MAX_ALIAS_LENGTH:
             return jsonify({"error": f"alias must be at most {cfg.MAX_ALIAS_LENGTH} characters"}), 400
 
-        description, err = _optional_text(data, "description")
-        if err:
-            return jsonify({"error": err}), 400
-        business_context, err = _optional_text(data, "business_context")
-        if err:
-            return jsonify({"error": err}), 400
-        glossary, err = _optional_glossary(data)
-        if err:
-            return jsonify({"error": err}), 400
-        important_tables, err = _optional_table_list(data, "important_tables")
-        if err:
-            return jsonify({"error": err}), 400
-        ignored_tables, err = _optional_table_list(data, "ignored_tables")
-        if err:
-            return jsonify({"error": err}), 400
+        description,     err = _optional_text(data, "description");      
+        if err: return jsonify({"error": err}), 400
+        business_context,err = _optional_text(data, "business_context"); 
+        if err: return jsonify({"error": err}), 400
+        glossary,        err = _optional_glossary(data);                 
+        if err: return jsonify({"error": err}), 400
+        important_tables,err = _optional_table_list(data, "important_tables"); 
+        if err: return jsonify({"error": err}), 400
+        ignored_tables,  err = _optional_table_list(data, "ignored_tables");   
+        if err: return jsonify({"error": err}), 400
 
-        # Test connection
         try:
             get_db_from_uri(uri)
         except Exception as e:
@@ -282,49 +275,43 @@ def create_app() -> Flask:
         s.add(conn)
         s.commit()
         logger.info(f"[Connection] Created id={conn.id} alias='{alias}' dialect={dialect} user={current_user.id}")
-        response = {
+        return jsonify({
             "id":      conn.id,
             "alias":   conn.alias,
             "dialect": conn.dialect,
             **_connection_profile_response(conn),
-        }
-        return jsonify(response), 201
+        }), 201
 
     @app.route("/connections", methods=["GET"])
     @login_required
     def list_connections():
         try:
-            page = int(request.args.get("page", 1))
-            if page < 1:
-                page = 1
+            page = max(1, int(request.args.get("page", 1)))
         except ValueError:
             page = 1
-
         try:
-            limit = int(request.args.get("limit", 20))
-            if limit < 1:
-                limit = 20
-            elif limit > 100:
-                limit = 100
+            limit = min(100, max(1, int(request.args.get("limit", 20))))
         except ValueError:
             limit = 20
-
-        offset = (page - 1) * limit
 
         s    = _app_db()
         rows = (
             s.query(DBConnection)
              .filter_by(user_id=current_user.id)
              .order_by(DBConnection.id.desc())
-             .offset(offset)
+             .offset((page - 1) * limit)
              .limit(limit)
              .all()
         )
         return jsonify([
-            {"id": c.id, "alias": c.alias, "dialect": c.dialect,
-             "has_memory": c.schema_memory_json is not None,
-             "created_at": c.created_at.isoformat() if c.created_at else None,
-             **_connection_profile_response(c)}
+            {
+                "id":         c.id,
+                "alias":      c.alias,
+                "dialect":    c.dialect,
+                "has_memory": c.schema_memory_json is not None,
+                "created_at": c.created_at.isoformat() if c.created_at else None,
+                **_connection_profile_response(c),
+            }
             for c in rows
         ])
 
@@ -336,10 +323,9 @@ def create_app() -> Flask:
         if not conn:
             return jsonify({"error": "Not found"}), 404
         try:
-            plaintext_uri = decrypt(conn.uri_encrypted)
-            clear_connection_cache(plaintext_uri)
+            clear_connection_cache(decrypt(conn.uri_encrypted))
         except Exception:
-            pass  # URI might be corrupt — still allow deletion
+            pass
         s.delete(conn)
         s.commit()
         logger.info(f"[Connection] Deleted id={conn_id} user={current_user.id}")
@@ -357,11 +343,11 @@ def create_app() -> Flask:
         Body:
         {
             "question":      "How many orders were placed last month?",
-            "connection_id": 3,          // saved connection (or send uri + alias directly)
-            "uri":           "...",      // alternative: one-off URI (not saved)
-            "api_key":       "gsk_...", // optional: user's own LLM key
-            "provider":      "groq",    // groq | gemini | openai
-            "model":         "..."       // optional model override
+            "connection_id": 3,
+            "uri":           "...",        // alternative: one-off URI (not saved)
+            "api_key":       "gsk_...",
+            "provider":      "groq",
+            "model":         "..."
         }
         """
         data     = request.get_json() or {}
@@ -369,26 +355,23 @@ def create_app() -> Flask:
 
         if not question:
             return jsonify({"error": "question is required"}), 400
-
         if len(question) > cfg.MAX_QUESTION_LENGTH:
             return jsonify({"error": f"question must be at most {cfg.MAX_QUESTION_LENGTH} characters"}), 400
 
         # ── Resolve DB connection ──────────────────────────────────────
-        s    = _app_db()
-        uri  = None
-        dialect = "mysql"
+        s       = _app_db()
         conn_id = data.get("connection_id")
 
         if conn_id:
             saved = s.query(DBConnection).filter_by(id=conn_id, user_id=current_user.id).first()
             if not saved:
                 return jsonify({"error": "Connection not found"}), 404
-            uri     = decrypt(saved.uri_encrypted)
-            dialect = saved.dialect
+            uri                = decrypt(saved.uri_encrypted)
+            dialect            = saved.dialect
             profile_connection = saved
         elif data.get("uri"):
-            uri     = data["uri"].strip()
-            dialect = detect_dialect(uri)
+            uri                = data["uri"].strip()
+            dialect            = detect_dialect(uri)
             profile_connection = None
         else:
             return jsonify({"error": "Provide connection_id or uri"}), 400
@@ -402,7 +385,7 @@ def create_app() -> Flask:
         try:
             llm = _get_llm_for_request()
         except RuntimeError as e:
-            return jsonify({"error": str(e)}), 402  # 402 = payment/quota issue
+            return jsonify({"error": str(e)}), 402
 
         # ── Session tracking ──────────────────────────────────────────
         if "chat_session_id" not in session:
@@ -411,7 +394,6 @@ def create_app() -> Flask:
         flask_session_id = session["chat_session_id"]
         chat_history     = _get_history(flask_session_id)
 
-        # Find or create a ChatSession row
         chat_sess = (
             s.query(ChatSession)
              .filter_by(user_id=current_user.id, ended_at=None)
@@ -419,10 +401,7 @@ def create_app() -> Flask:
              .first()
         )
         if not chat_sess:
-            chat_sess = ChatSession(
-                user_id=current_user.id,
-                connection_id=conn_id,
-            )
+            chat_sess = ChatSession(user_id=current_user.id, connection_id=conn_id)
             s.add(chat_sess)
             s.commit()
 
@@ -461,7 +440,6 @@ def create_app() -> Flask:
         s.add(msg)
         s.commit()
 
-        # ── Update in-memory history ──────────────────────────────────
         _append_history(flask_session_id, question, result.get("explanation") or "")
 
         logger.info(
@@ -469,25 +447,21 @@ def create_app() -> Flask:
             f"success={result['success']} time={elapsed:.2f}s retries={result.get('retries', 0)}"
         )
 
-        # ── Serialise results ─────────────────────────────────────────
         raw_results = result.get("results")
-        if isinstance(raw_results, str):
-            # db.run() returns a string by default; parse it for the frontend
-            serialised = raw_results
-        else:
-            serialised = raw_results  # already list/dict from custom executor
+        serialised  = raw_results  # already list/dict from executor; str from db.run() fallback
 
         return jsonify({
-            "success":       result["success"],
-            "sql":           result.get("sql"),
-            "results":       serialised,
-            "explanation":   result.get("explanation"),
-            "error":         result.get("error"),
-            "retries":       result.get("retries", 0),
-            "healing_log":   result.get("healing_log", []),
-            "response_time_s": round(elapsed, 3),
-            "message_id":    msg.id,
-            "schema_source": result.get("schema_source", "live"),
+            "success":           result["success"],
+            "sql":               result.get("sql"),
+            "results":           serialised,
+            "explanation":       result.get("explanation"),
+            "error":             result.get("error"),
+            "retries":           result.get("retries", 0),
+            "healing_log":       result.get("healing_log", []),
+            "response_time_s":   round(elapsed, 3),
+            "message_id":        msg.id,
+            "schema_source":     result.get("schema_source", "live"),
+            "results_truncated": result.get("results_truncated", False),  # ← FIX
         })
 
     # ─── Session history ──────────────────────────────────────────────────
@@ -496,38 +470,29 @@ def create_app() -> Flask:
     @login_required
     def list_sessions():
         try:
-            page = int(request.args.get("page", 1))
-            if page < 1:
-                page = 1
+            page = max(1, int(request.args.get("page", 1)))
         except ValueError:
             page = 1
-
         try:
-            limit = int(request.args.get("limit", 20))
-            if limit < 1:
-                limit = 20
-            elif limit > 100:
-                limit = 100
+            limit = min(100, max(1, int(request.args.get("limit", 20))))
         except ValueError:
             limit = 20
-
-        offset = (page - 1) * limit
 
         s    = _app_db()
         rows = (
             s.query(ChatSession)
              .filter_by(user_id=current_user.id)
              .order_by(ChatSession.started_at.desc())
-             .offset(offset)
+             .offset((page - 1) * limit)
              .limit(limit)
              .all()
         )
         return jsonify([
             {
-                "id":           r.id,
+                "id":            r.id,
                 "connection_id": r.connection_id,
-                "started_at":   r.started_at.isoformat() if r.started_at else None,
-                "ended_at":     r.ended_at.isoformat()   if r.ended_at   else None,
+                "started_at":    r.started_at.isoformat() if r.started_at else None,
+                "ended_at":      r.ended_at.isoformat()   if r.ended_at   else None,
                 "message_count": len(r.messages),
             }
             for r in rows
@@ -536,27 +501,25 @@ def create_app() -> Flask:
     @app.route("/sessions/<int:sess_id>", methods=["GET"])
     @login_required
     def get_session(sess_id):
-        s        = _app_db()
+        s         = _app_db()
         chat_sess = s.query(ChatSession).filter_by(id=sess_id, user_id=current_user.id).first()
         if not chat_sess:
             return jsonify({"error": "Not found"}), 404
-
-        messages = [
-            {
-                "id":            m.id,
-                "question":      m.question,
-                "sql":           m.sql_generated,
-                "answer":        m.answer,
-                "error":         m.error,
-                "retries":       m.retries,
-                "response_time": m.response_time,
-                "created_at":    m.created_at.isoformat() if m.created_at else None,
-            }
-            for m in chat_sess.messages
-        ]
         return jsonify({
             "session_id": sess_id,
-            "messages":   messages,
+            "messages": [
+                {
+                    "id":            m.id,
+                    "question":      m.question,
+                    "sql":           m.sql_generated,
+                    "answer":        m.answer,
+                    "error":         m.error,
+                    "retries":       m.retries,
+                    "response_time": m.response_time,
+                    "created_at":    m.created_at.isoformat() if m.created_at else None,
+                }
+                for m in chat_sess.messages
+            ],
         })
 
     @app.route("/sessions/<int:sess_id>", methods=["DELETE"])
@@ -587,8 +550,6 @@ def create_app() -> Flask:
         """
         Trigger (or re-trigger) schema memory exploration for a saved connection.
         Safe to call multiple times — overwrites the cached JSON.
-
-        Body: { "api_key": "...", "provider": "groq" }  (optional)
         """
         s    = _app_db()
         conn = s.query(DBConnection).filter_by(id=conn_id, user_id=current_user.id).first()
@@ -611,6 +572,7 @@ def create_app() -> Flask:
                 uri=plaintext_uri, db=db, engine=engine,
                 llm=llm, dialect=conn.dialect,
                 conn_id=conn_id, app_db_session=s,
+                ignored_tables=conn.ignored_tables_json,
             )
             logger.info(f"[Explore] conn={conn_id} tables={len(memory.tables)}")
             return jsonify({
@@ -626,20 +588,16 @@ def create_app() -> Flask:
     @app.route("/connections/<int:conn_id>/memory", methods=["GET"])
     @login_required
     def get_connection_memory(conn_id):
-        """
-        Returns the cached schema memory for a connection, if it exists.
-        """
+        """Returns the cached schema memory for a connection, if it exists."""
         s    = _app_db()
         conn = s.query(DBConnection).filter_by(id=conn_id, user_id=current_user.id).first()
         if not conn:
             return jsonify({"error": "Connection not found"}), 404
-
         if not conn.schema_memory_json:
             return jsonify({
                 "exists":  False,
                 "message": "No schema memory yet. POST /connections/<id>/explore to generate it.",
             })
-
         from schema_memory import _from_json
         memory = _from_json(conn.schema_memory_json)
         return jsonify({"exists": True, **memory_summary_for_api(memory)})
@@ -654,6 +612,57 @@ def create_app() -> Flask:
             return jsonify({"error": "Connection not found"}), 404
         delete_memory_from_db(conn_id, s)
         return jsonify({"message": "memory deleted — will re-explore on next query"})
+
+    # ─── Table sample endpoint (agentic tool) ─────────────────────────────
+
+    @app.route("/connections/<int:conn_id>/sample", methods=["GET"])
+    @login_required
+    def sample_table(conn_id):
+        """
+        Return a small sample of rows from a named table.
+        Used by the agent's get_table_sample tool and directly queryable by devs.
+
+        Query params:
+            table   (required) table name
+            column  (optional) restrict to a specific column
+            limit   (optional) number of rows, default 5, max 20
+        """
+        table_name = (request.args.get("table") or "").strip()
+        if not table_name:
+            return jsonify({"error": "table query param is required"}), 400
+
+        try:
+            limit = min(20, max(1, int(request.args.get("limit", 5))))
+        except ValueError:
+            limit = 5
+
+        column_name = (request.args.get("column") or "").strip() or None
+
+        s    = _app_db()
+        conn = s.query(DBConnection).filter_by(id=conn_id, user_id=current_user.id).first()
+        if not conn:
+            return jsonify({"error": "Connection not found"}), 404
+
+        try:
+            plaintext_uri = decrypt(conn.uri_encrypted)
+            _, engine = get_db_from_uri(plaintext_uri)
+        except Exception as e:
+            return jsonify({"error": f"DB connection failed: {e}"}), 500
+
+        try:
+            from schema_memory import get_table_sample
+            rows, columns = get_table_sample(engine, table_name, conn.dialect, limit, column_name)
+            return jsonify({
+                "table":   table_name,
+                "columns": columns,
+                "rows":    rows,
+                "count":   len(rows),
+            })
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            logger.warning(f"[Sample] table={table_name} error={e}")
+            return jsonify({"error": f"Could not sample table: {e}"}), 500
 
     return app
 
@@ -670,7 +679,6 @@ if __name__ == "__main__":
 
 
 # ─── Serve frontend HTML (Option A — quick wire-up) ──────────────────────────
-# Remove this section once the React frontend is ready
 
 @app.route("/app")
 @app.route("/app/<path:subpath>")

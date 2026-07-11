@@ -8,6 +8,7 @@ Public API:
     load_or_explore(uri, db, engine, llm, dialect, conn_id, app_db_session, ignored_tables)
     explore_and_save(uri, db, engine, llm, dialect, conn_id, app_db_session, ignored_tables)
     get_schema_context(memory, question, ignored_tables)
+    get_table_sample(engine, table_name, dialect, limit, column_name)
     memory_summary_for_api(memory)
 """
 
@@ -17,13 +18,22 @@ import json
 import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 MAX_SAMPLE_ROWS = 3
 MAX_TABLES      = 60
 MAX_COLS_SHOWN  = 40
+
+# Tables that are almost never useful for NL queries — skip them unless explicitly referenced
+_SYSTEM_TABLE_PREFIXES = (
+    "information_schema",
+    "pg_",
+    "sql_",
+    "sys_",
+    "mysql.",
+)
 
 
 # ─── Data model ───────────────────────────────────────────────────────────────
@@ -151,9 +161,9 @@ def _introspect(
 
     ignored_lower = {t.lower() for t in (ignored_tables or [])}
 
-    inspector = sa_inspect(engine)
+    inspector      = sa_inspect(engine)
     all_table_names = inspector.get_table_names()
-    table_names = [
+    table_names    = [
         t for t in all_table_names
         if t.lower() not in ignored_lower
     ][:MAX_TABLES]
@@ -182,7 +192,7 @@ def _introspect(
                 )
                 try:
                     qc = _quote_identifier(col["name"], dialect)
-                    q = text(
+                    q  = text(
                         f"SELECT {qc} FROM {qt} "
                         f"WHERE {qc} IS NOT NULL "
                         f"LIMIT {MAX_SAMPLE_ROWS}"
@@ -234,7 +244,6 @@ def _strip_llm_json(raw: str) -> str:
     """Strip markdown code fences that LLMs sometimes wrap JSON in."""
     raw = raw.strip()
     if raw.startswith("```"):
-        # Remove opening fence (```json or ```)
         raw = raw[raw.index("\n") + 1:] if "\n" in raw else raw[3:]
     if raw.endswith("```"):
         raw = raw[:-3]
@@ -246,15 +255,95 @@ def _run_llm_summary(llm, tables: List[TableInfo], dialect: str) -> tuple[str, D
 
     prompt = _build_exploration_prompt(tables, dialect)
     try:
-        response = llm.invoke([HumanMessage(content=prompt)])
-        raw = response.content if hasattr(response, "content") else str(response)
-        parsed = json.loads(_strip_llm_json(raw))
+        response   = llm.invoke([HumanMessage(content=prompt)])
+        raw        = response.content if hasattr(response, "content") else str(response)
+        parsed     = json.loads(_strip_llm_json(raw))
         db_summary = parsed.get("db_summary", "")
         table_descs = {t["name"]: t.get("description", "") for t in parsed.get("tables", [])}
         return db_summary, table_descs
     except Exception as e:
         logger.warning(f"[Memory] LLM summary failed: {e}")
         return "Schema memory collected but LLM summarisation failed.", {}
+
+
+# ─── Table sample (agentic tool) ──────────────────────────────────────────────
+
+def get_table_sample(
+    engine,
+    table_name: str,
+    dialect: str,
+    limit: int = 5,
+    column_name: Optional[str] = None,
+) -> Tuple[List[Dict], List[str]]:
+    """
+    Return a small sample of rows from a table.
+
+    Used by the agent when it needs to inspect actual data values to write
+    better SQL (e.g. check what format a date column uses, what enum values
+    exist, or how a foreign key is structured).
+
+    Also exposed as GET /connections/<id>/sample for direct developer use.
+
+    Args:
+        engine:      SQLAlchemy engine for the target database
+        table_name:  name of the table to sample
+        dialect:     database dialect for identifier quoting
+        limit:       max rows to return (capped at 20)
+        column_name: if given, restrict to a single column
+
+    Returns:
+        (rows, columns)  where rows is a list of dicts and columns is a list of names
+
+    Raises:
+        ValueError if the table doesn't exist
+        Exception  for DB-level errors (caller should handle)
+    """
+    from sqlalchemy import inspect as sa_inspect, text
+    import datetime
+    from decimal import Decimal
+
+    limit = min(20, max(1, limit))
+
+    # Validate table exists — prevents SQL injection via table_name
+    inspector   = sa_inspect(engine)
+    known_tables = {t.lower() for t in inspector.get_table_names()}
+    if table_name.lower() not in known_tables:
+        raise ValueError(f"Table '{table_name}' does not exist in this database.")
+
+    qt = _quote_identifier(table_name, dialect)
+
+    if column_name:
+        # Validate column exists too
+        cols = inspector.get_columns(table_name)
+        known_cols = {c["name"].lower() for c in cols}
+        if column_name.lower() not in known_cols:
+            raise ValueError(f"Column '{column_name}' does not exist in table '{table_name}'.")
+        qc       = _quote_identifier(column_name, dialect)
+        select_  = f"SELECT {qc} FROM {qt} WHERE {qc} IS NOT NULL LIMIT {limit}"
+        col_names = [column_name]
+    else:
+        select_   = f"SELECT * FROM {qt} LIMIT {limit}"
+        col_names = None  # resolved after query
+
+    def serialise(val):
+        if isinstance(val, (datetime.datetime, datetime.date)):
+            return val.isoformat()
+        if isinstance(val, Decimal):
+            return float(val)
+        if isinstance(val, bytes):
+            return val.decode("utf-8", errors="replace")
+        return val
+
+    with engine.connect() as conn:
+        res  = conn.execute(text(select_))
+        cols = col_names or list(res.keys())
+        rows = [
+            {col: serialise(row[i]) for i, col in enumerate(cols)}
+            for row in res.fetchall()
+        ]
+
+    logger.debug(f"[Sample] {table_name}: {len(rows)} rows, {len(cols)} cols")
+    return rows, cols
 
 
 # ─── Public API ───────────────────────────────────────────────────────────────
@@ -270,7 +359,7 @@ def explore_and_save(
     ignored_tables: Optional[List[str]] = None,
 ) -> MemoryData:
     logger.info(f"[Memory] Exploring database (dialect={dialect})")
-    tables = _introspect(db, engine, dialect, ignored_tables=ignored_tables)
+    tables      = _introspect(db, engine, dialect, ignored_tables=ignored_tables)
     db_summary, table_descs = _run_llm_summary(llm, tables, dialect)
     for t in tables:
         t.description = table_descs.get(t.name, "")
@@ -314,7 +403,6 @@ def get_schema_context(
 ) -> str:
     ignored_lower = {t.lower() for t in (ignored_tables or [])}
 
-    # Filter ignored tables before scoring
     candidate_tables = [
         t for t in memory.tables
         if t.name.lower() not in ignored_lower
@@ -323,7 +411,7 @@ def get_schema_context(
     q = question.lower()
     scored: list[tuple[int, TableInfo]] = []
     for t in candidate_tables:
-        score = 0
+        score  = 0
         tokens = t.name.lower().replace("_", " ").split()
         for tok in tokens:
             if tok and tok in q:
@@ -338,9 +426,8 @@ def get_schema_context(
 
     scored.sort(key=lambda x: (-x[0], x[1].name))
 
-    # If nothing scored, fall back to highest row-count tables
     if not any(s > 0 for s, _ in scored):
-        selected = [t for t in sorted(candidate_tables, key=lambda t: -t.row_count)][:max_tables]
+        selected = sorted(candidate_tables, key=lambda t: -t.row_count)[:max_tables]
     else:
         selected = [t for _, t in scored[:max_tables]]
 
@@ -354,7 +441,7 @@ def get_schema_context(
         desc = f"  — {t.description}" if t.description else ""
         parts.append(f"\nTABLE {t.name} ({t.row_count:,} rows){desc}")
         for col in t.columns:
-            samples = f"  e.g. {', '.join(repr(v) for v in col.sample_values[:2])}" if col.sample_values else ""
+            samples  = f"  e.g. {', '.join(repr(v) for v in col.sample_values[:2])}" if col.sample_values else ""
             nullable = "" if col.nullable else " NOT NULL"
             parts.append(f"  {col.name}  {col.type}{nullable}{samples}")
 
