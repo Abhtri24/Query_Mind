@@ -28,6 +28,7 @@ Endpoint map:
     GET  /connections/<id>/sample      sample rows from a table (agentic tool)
 """
 
+import webbrowser
 import logging
 import os
 import time
@@ -274,6 +275,53 @@ def create_app() -> Flask:
     def budget():
         return jsonify(get_budget_status())
 
+    @app.route("/analytics", methods=["GET"])
+    @login_required
+    def analytics():
+        """
+        Aggregated query analytics for the current user.
+        Useful for tuning the agent — see what's failing, how fast, cache hit rate.
+        """
+        # pyrefly: ignore [missing-import]
+        import sqlalchemy
+        s = _app_db()
+
+        rows = (
+            s.query(ChatMessage)
+             .join(ChatSession, ChatMessage.session_id == ChatSession.id)
+             .filter(ChatSession.user_id == current_user.id)
+             .all()
+        )
+
+        if not rows:
+            return jsonify({"message": "No queries yet.", "total": 0})
+
+        total        = len(rows)
+        errors       = [r for r in rows if r.error]
+        total_time   = sum(r.response_time or 0 for r in rows)
+        total_retries = sum(r.retries or 0 for r in rows)
+        from_memory  = [r for r in rows if r.schema_source == "memory"]
+
+        return jsonify({
+            "total_queries":       total,
+            "success_rate":        round((total - len(errors)) / total * 100, 1),
+            "error_count":         len(errors),
+            "avg_response_time_s": round(total_time / total, 3),
+            "avg_retries":         round(total_retries / total, 3),
+            "schema_source": {
+                "memory": len(from_memory),
+                "live":   total - len(from_memory),
+            },
+            "recent_errors": [
+                {
+                    "question": r.question,
+                    "error":    r.error,
+                    "at":       r.created_at.isoformat() if r.created_at else None,
+                }
+                for r in errors[-5:]
+            ],
+        })
+
     # ─── DB Connections ───────────────────────────────────────────────────
 
     @app.route("/connections", methods=["POST"])
@@ -461,7 +509,10 @@ def create_app() -> Flask:
                 uri=uri,
                 conn_id=conn_id,
                 app_db_session=s,
+                
                 profile=profile_connection,
+                ignored_tables=profile_connection.ignored_tables_json if profile_connection else None,
+
             )
         except Exception as e:
             logger.exception("run_nl_query raised")
@@ -596,7 +647,8 @@ def create_app() -> Flask:
                 uri=uri, db=db, engine=engine, llm=llm,
                 dialect=dialect, conn_id=conn_id, app_db_session=s,
             )
-            schema        = get_schema_context(memory, question)
+            schema        = get_schema_context(memory, question,    ignored_tables=profile_connection.ignored_tables_json if profile_connection else None,
+)
             schema_source = "memory"
         except Exception:
             from agent_optimized import get_all_table_names, pick_relevant_tables, fetch_schema

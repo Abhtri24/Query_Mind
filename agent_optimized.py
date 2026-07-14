@@ -682,6 +682,7 @@ def run_nl_query(
     profile=None,
     skip_clarification: bool = False,
     skip_planning: bool = False,
+    ignored_tables: Optional[List[str]] = None,
 ) -> Dict:
     """
     Full agentic pipeline:
@@ -727,7 +728,7 @@ def run_nl_query(
     if memory is not None:
         try:
             from schema_memory import get_schema_context
-            schema        = get_schema_context(memory, question)
+            schema        = get_schema_context(memory, question, ignored_tables=ignored_tables)
             schema_source = "memory"
             logger.info(f"[Memory] Using cached schema memory ({len(memory.tables)} tables)")
         except Exception as e:

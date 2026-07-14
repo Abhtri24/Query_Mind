@@ -33,7 +33,14 @@ _SYSTEM_TABLE_PREFIXES = (
     "sql_",
     "sys_",
     "mysql.",
+    "alembic_",
 )
+
+_SKIP_SAMPLE_COLUMNS = {
+    "password", "password_hash", "hashed_password", "secret",
+    "token", "api_key", "private_key", "preference_vector",
+    "embedding_id", "embedding",
+}
 
 
 # ─── Data model ───────────────────────────────────────────────────────────────
@@ -164,10 +171,10 @@ def _introspect(
     inspector      = sa_inspect(engine)
     all_table_names = inspector.get_table_names()
     table_names    = [
-        t for t in all_table_names
-        if t.lower() not in ignored_lower
-    ][:MAX_TABLES]
-
+    t for t in all_table_names
+    if t.lower() not in ignored_lower
+    and not any(t.lower().startswith(p) for p in _SYSTEM_TABLE_PREFIXES)
+][:MAX_TABLES]
     if ignored_lower:
         skipped = [t for t in all_table_names if t.lower() in ignored_lower]
         if skipped:
@@ -190,17 +197,19 @@ def _introspect(
                     type=str(col["type"]),
                     nullable=col.get("nullable", True),
                 )
-                try:
-                    qc = _quote_identifier(col["name"], dialect)
-                    q  = text(
-                        f"SELECT {qc} FROM {qt} "
-                        f"WHERE {qc} IS NOT NULL "
-                        f"LIMIT {MAX_SAMPLE_ROWS}"
-                    )
-                    rows = conn.execute(q).fetchall()
-                    col_info.sample_values = [str(r[0])[:80] for r in rows]
-                except Exception:
-                    pass
+                if col["name"].lower() not in _SKIP_SAMPLE_COLUMNS:
+                    try:
+                        qc = _quote_identifier(col["name"], dialect)
+                        q  = text(
+                            f"SELECT {qc} FROM {qt} "
+                            f"WHERE {qc} IS NOT NULL "
+                            f"LIMIT {MAX_SAMPLE_ROWS}"
+                        )
+                        rows = conn.execute(q).fetchall()
+                        col_info.sample_values = [str(r[0])[:80] for r in rows]
+                    except Exception:
+                        pass
+                columns.append(col_info)
                 columns.append(col_info)
 
             row_count = 0
