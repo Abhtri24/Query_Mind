@@ -114,9 +114,9 @@ def create_app() -> Flask:
                 pass
 
     def _app_db():
-        if "db_session" not in g:
-            g["db_session"] = get_db_session()
-        return g["db_session"]
+        if not hasattr(g, "db_session"):
+            g.db_session = get_db_session()
+        return g.db_session
 
     # ── Flask-Bcrypt ─────────────────────────────────────────────────────
     bcrypt.init_app(app)
@@ -476,6 +476,7 @@ def create_app() -> Flask:
         cached_result, cache_key = _query_cache_get(conn_id, question)
         if cached_result:
             logger.info(f"[Cache] Hit for conn={conn_id}")
+            cached_result["results_truncated"] = cached_result.get("results_truncated", False)
             return jsonify({**cached_result, "cached": True})
 
         # ── Session tracking ──────────────────────────────────────────
@@ -628,6 +629,7 @@ def create_app() -> Flask:
         cached_result, cache_key = _query_cache_get(conn_id, question)
         if cached_result:
             logger.info(f"[Cache] Stream hit for conn={conn_id}")
+            cached_result["results_truncated"] = cached_result.get("results_truncated", False)
             # Return a single-event SSE stream for consistency
             payload = json.dumps({"status": "done", "cached": True, **cached_result})
 
@@ -647,13 +649,21 @@ def create_app() -> Flask:
                 uri=uri, db=db, engine=engine, llm=llm,
                 dialect=dialect, conn_id=conn_id, app_db_session=s,
             )
-            schema        = get_schema_context(memory, question,    ignored_tables=profile_connection.ignored_tables_json if profile_connection else None,
-)
+            schema        = get_schema_context(
+                memory, question,
+                ignored_tables=profile_connection.ignored_tables_json if profile_connection else None,
+                detail="full"
+            )
             schema_source = "memory"
         except Exception:
             from agent_optimized import get_all_table_names, pick_relevant_tables, fetch_schema
+            all_tables = get_all_table_names(db, engine)
+            ignored_tables = profile_connection.ignored_tables_json if profile_connection else None
+            if ignored_tables:
+                ignored_lower = {t.lower() for t in ignored_tables}
+                all_tables = [t for t in all_tables if t.lower() not in ignored_lower]
             schema = fetch_schema(db, engine, pick_relevant_tables(
-                question, get_all_table_names(db, engine)
+                question, all_tables
             ))
 
         def generate():

@@ -367,6 +367,15 @@ def explore_and_save(
     app_db_session=None,
     ignored_tables: Optional[List[str]] = None,
 ) -> MemoryData:
+    if not ignored_tables and conn_id and app_db_session:
+        try:
+            from models import DBConnection
+            conn = app_db_session.get(DBConnection, conn_id)
+            if conn and conn.ignored_tables_json:
+                ignored_tables = conn.ignored_tables_json
+        except Exception as e:
+            logger.warning(f"[Memory] Could not load ignored_tables from connection: {e}")
+
     logger.info(f"[Memory] Exploring database (dialect={dialect})")
     tables      = _introspect(db, engine, dialect, ignored_tables=ignored_tables)
     db_summary, table_descs = _run_llm_summary(llm, tables, dialect)
@@ -393,15 +402,31 @@ def load_or_explore(
     app_db_session=None,
     ignored_tables: Optional[List[str]] = None,
 ) -> MemoryData:
+    if not ignored_tables and conn_id and app_db_session:
+        try:
+            from models import DBConnection
+            conn = app_db_session.get(DBConnection, conn_id)
+            if conn and conn.ignored_tables_json:
+                ignored_tables = conn.ignored_tables_json
+        except Exception as e:
+            logger.warning(f"[Memory] Could not load ignored_tables from connection: {e}")
+
     cached = _load_from_db(conn_id, app_db_session)
     if cached:
         logger.debug(f"[Memory] Cache hit for conn_id={conn_id}")
-        return cached
-    logger.info("[Memory] No cache — running first-connect exploration")
-    return explore_and_save(
-        uri, db, engine, llm, dialect, conn_id, app_db_session,
-        ignored_tables=ignored_tables,
-    )
+        memory = cached
+    else:
+        logger.info("[Memory] No cache — running first-connect exploration")
+        memory = explore_and_save(
+            uri, db, engine, llm, dialect, conn_id, app_db_session,
+            ignored_tables=ignored_tables,
+        )
+
+    if ignored_tables and memory:
+        ignored_lower = {t.lower() for t in ignored_tables}
+        memory.tables = [t for t in memory.tables if t.name.lower() not in ignored_lower]
+
+    return memory
 
 
 def get_schema_context(
@@ -409,6 +434,7 @@ def get_schema_context(
     question: str,
     max_tables: int = 12,
     ignored_tables: Optional[List[str]] = None,
+    detail: str = "full",   # "full" | "slim" | "tables_only"
 ) -> str:
     ignored_lower = {t.lower() for t in (ignored_tables or [])}
 
@@ -439,6 +465,30 @@ def get_schema_context(
         selected = sorted(candidate_tables, key=lambda t: -t.row_count)[:max_tables]
     else:
         selected = [t for _, t in scored[:max_tables]]
+
+    if detail == "tables_only":
+        parts = [
+            f"DATABASE OVERVIEW: {memory.db_summary}",
+            f"Dialect: {memory.dialect.upper()}",
+            "",
+            "TABLES:",
+        ]
+        for t in selected:
+            desc = f": {t.description}" if t.description else ""
+            parts.append(f"- {t.name}{desc}")
+        return "\n".join(parts)
+
+    if detail == "slim":
+        parts = [
+            f"DATABASE OVERVIEW: {memory.db_summary}",
+            f"Dialect: {memory.dialect.upper()}",
+            "",
+            "TABLES:",
+        ]
+        for t in selected:
+            desc = f": {t.description}" if t.description else ""
+            parts.append(f"- {t.name} ({t.row_count:,} rows){desc}")
+        return "\n".join(parts)
 
     parts = [
         f"DATABASE OVERVIEW: {memory.db_summary}",
@@ -483,3 +533,31 @@ def memory_summary_for_api(memory: MemoryData) -> dict:
             for t in memory.tables
         ],
     }
+
+
+# ponytail: "slim" and "tables_only" are string constants — 
+# upgrade to enum if a third caller needs validation
+if __name__ == "__main__":
+    from dataclasses import dataclass, field
+    # minimal smoke-test: all three detail levels render without error
+    dummy = MemoryData(
+        dialect="postgresql",
+        db_summary="Test DB",
+        explored_at="2026-01-01",
+        tables=[
+            TableInfo("users", 100, [
+                ColumnInfo("id", "UUID", False, ["abc"]),
+                ColumnInfo("email", "VARCHAR", True, ["a@b.com"]),
+            ], "Stores users."),
+        ]
+    )
+    for d in ("full", "slim", "tables_only"):
+        out = get_schema_context(dummy, "show me users", detail=d)
+        assert out, f"Empty output for detail={d}"
+        if d == "tables_only":
+            assert "id" not in out, "tables_only should not include columns"
+        if d == "slim":
+            assert "100" in out, "slim should include row count"
+        if d == "full":
+            assert "id" in out, "full should include columns"
+    print("schema compression self-check passed")

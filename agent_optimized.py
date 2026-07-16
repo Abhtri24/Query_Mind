@@ -386,8 +386,8 @@ Given a user's question and a database schema, decide if the question is specifi
 enough to answer with SQL, or if a single clarifying question would significantly
 improve the result.
 
-DATABASE SCHEMA (abbreviated):
-{schema[:2000]}
+DATABASE SCHEMA:
+{schema}
 
 Rules:
 - Only flag genuinely ambiguous questions where multiple valid interpretations exist
@@ -443,8 +443,8 @@ def plan_query(llm, question: str, schema: str) -> QueryPlan:
 Given a user question and a database schema, decompose the question into the minimum
 number of SQL sub-queries needed to answer it completely.
 
-DATABASE SCHEMA (abbreviated):
-{schema[:2000]}
+DATABASE SCHEMA:
+{schema}
 
 Rules:
 - A question answerable by a single SELECT → return exactly 1 step.
@@ -728,8 +728,18 @@ def run_nl_query(
     if memory is not None:
         try:
             from schema_memory import get_schema_context
-            schema        = get_schema_context(memory, question, ignored_tables=ignored_tables)
-            schema_source = "memory"
+            schema_tables_only = get_schema_context(memory, question, ignored_tables=ignored_tables, detail="tables_only")
+            schema_slim        = get_schema_context(memory, question, ignored_tables=ignored_tables, detail="slim")
+            schema_full        = get_schema_context(memory, question, ignored_tables=ignored_tables, detail="full")
+            schema_source      = "memory"
+
+            logger.info("=" * 80)
+            logger.info("SCHEMA COMPRESSION TEST")
+            logger.info(f"tables_only : {len(schema_tables_only):,} chars")
+            logger.info(f"slim        : {len(schema_slim):,} chars")
+            logger.info(f"full        : {len(schema_full):,} chars")
+            logger.info("=" * 80)
+
             logger.info(f"[Memory] Using cached schema memory ({len(memory.tables)} tables)")
         except Exception as e:
             logger.warning(f"[Memory] get_schema_context failed: {e}")
@@ -737,13 +747,20 @@ def run_nl_query(
 
     if memory is None:
         all_tables = get_all_table_names(db, engine)
+        if ignored_tables:
+            ignored_lower = {t.lower() for t in ignored_tables}
+            all_tables = [t for t in all_tables if t.lower() not in ignored_lower]
         relevant   = pick_relevant_tables(question, all_tables)
-        schema     = fetch_schema(db, engine, relevant)
+        live_schema = fetch_schema(db, engine, relevant)
+        schema_tables_only = live_schema
+        schema_slim        = live_schema
+        schema_full        = live_schema
         logger.info("[Memory] Using live schema fetch (no memory available)")
 
     # ── Step 1: Clarification check ───────────────────────────────────────
     if not skip_clarification:
-        clarification = check_clarification_needed(llm, question, schema)
+        logger.info("[Stage] Clarifier -> tables_only schema")
+        clarification = check_clarification_needed(llm, question, schema_tables_only)
         if clarification:
             logger.info(f"[Clarify] Asking: {clarification}")
             return {
@@ -762,9 +779,11 @@ def run_nl_query(
 
     # ── Step 2: Query planning ────────────────────────────────────────────
     if not skip_planning:
-        plan = plan_query(llm, question, schema)
+        logger.info("[Stage] Planner -> slim schema")
+        plan = plan_query(llm, question, schema_slim)
         logger.info(f"[Planner] {len(plan.steps)} step(s): {plan.steps}")
     else:
+        logger.info("[Stage] Planner -> disabled (skipping)")
         plan = QueryPlan(steps=[question], needs_merge=False, rationale="skipped")
 
     # ── Step 3: Execute each sub-query ────────────────────────────────────
@@ -775,13 +794,14 @@ def run_nl_query(
 
     for i, sub_question in enumerate(plan.steps):
         logger.info(f"[Plan] Step {i+1}/{len(plan.steps)}: {sub_question}")
-
+        
+        logger.info("[Stage] Execution -> full schema")
         qr = execute_with_healing(
             question=sub_question,
             llm=llm,
             db=db,
             engine=engine,
-            schema=schema,
+            schema=schema_full,
             dialect=dialect,
             chat_history=chat_history if i == 0 else None,  # only first step gets history
             profile_context=profile_context,
