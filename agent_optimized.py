@@ -721,6 +721,7 @@ def run_nl_query(
             memory = load_or_explore(
                 uri=uri, db=db, engine=engine, llm=llm, dialect=dialect,
                 conn_id=conn_id, app_db_session=app_db_session,
+                ignored_tables=ignored_tables,
             )
         except Exception as e:
             logger.warning(f"[Memory] Could not load/explore: {e}")
@@ -830,6 +831,7 @@ def run_nl_query(
             step_results=step_results,
         )
         last = step_results[-1]
+        results_truncated = any(r["truncated"] for r in step_results)
         return {
             "success":              True,
             "sql":                  last["sql"],
@@ -839,7 +841,7 @@ def run_nl_query(
             "retries":              total_retries,
             "healing_log":          all_logs,
             "schema_source":        schema_source,
-            "results_truncated":    last["truncated"],
+            "results_truncated":    results_truncated,
             "clarification_needed": None,
             "plan":                 plan.steps,
         }

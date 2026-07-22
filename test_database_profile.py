@@ -106,7 +106,9 @@ class TestDatabaseProfile(unittest.TestCase):
         self.assertIn("Customer = Reader", context)
         self.assertIn("Order = Purchase", context)
         self.assertIn("Important Tables:\nbooks\nauthors", context)
-        self.assertIn("Ignored Tables:\nlogs\nalembic_version", context)
+        self.assertNotIn("Ignored Tables:", context)
+        self.assertNotIn("logs", context)
+        self.assertNotIn("alembic_version", context)
         self.assertNotIn("ignored", context)
 
         prompt = _build_prompt("CREATE TABLE books (id INTEGER);", "sqlite", profile_context=context)

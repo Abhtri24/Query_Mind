@@ -648,6 +648,7 @@ def create_app() -> Flask:
             memory = load_or_explore(
                 uri=uri, db=db, engine=engine, llm=llm,
                 dialect=dialect, conn_id=conn_id, app_db_session=s,
+                ignored_tables=profile_connection.ignored_tables_json if profile_connection else None,
             )
             schema        = get_schema_context(
                 memory, question,
@@ -729,6 +730,7 @@ def create_app() -> Flask:
                 )
 
                 last       = step_results[-1]
+                results_truncated = any(r["truncated"] for r in step_results)
                 done_event = {
                     "status":              "done",
                     "success":             True,
@@ -739,7 +741,7 @@ def create_app() -> Flask:
                     "retries":             total_retries,
                     "healing_log":         all_logs,
                     "schema_source":       schema_source,
-                    "results_truncated":   last["truncated"],
+                    "results_truncated":   results_truncated,
                     "clarification_needed": None,
                     "plan":                plan.steps,
                     "cached":              False,

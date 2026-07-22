@@ -98,6 +98,13 @@ def _from_json(raw: str) -> MemoryData:
 
 # ─── DB persistence ───────────────────────────────────────────────────────────
 
+def _filter_ignored_tables(memory: MemoryData, ignored_tables: Optional[List[str]]) -> MemoryData:
+    if ignored_tables:
+        ignored_lower = {t.lower() for t in ignored_tables}
+        memory.tables = [t for t in memory.tables if t.name.lower() not in ignored_lower]
+    return memory
+
+
 def _load_from_db(conn_id: int, app_db_session) -> Optional[MemoryData]:
     if conn_id is None or app_db_session is None:
         return None
@@ -422,11 +429,7 @@ def load_or_explore(
             ignored_tables=ignored_tables,
         )
 
-    if ignored_tables and memory:
-        ignored_lower = {t.lower() for t in ignored_tables}
-        memory.tables = [t for t in memory.tables if t.name.lower() not in ignored_lower]
-
-    return memory
+    return _filter_ignored_tables(memory, ignored_tables)
 
 
 def get_schema_context(
@@ -436,12 +439,8 @@ def get_schema_context(
     ignored_tables: Optional[List[str]] = None,
     detail: str = "full",   # "full" | "slim" | "tables_only"
 ) -> str:
-    ignored_lower = {t.lower() for t in (ignored_tables or [])}
-
-    candidate_tables = [
-        t for t in memory.tables
-        if t.name.lower() not in ignored_lower
-    ]
+    memory = _filter_ignored_tables(memory, ignored_tables)
+    candidate_tables = memory.tables
 
     q = question.lower()
     scored: list[tuple[int, TableInfo]] = []
@@ -549,11 +548,15 @@ if __name__ == "__main__":
                 ColumnInfo("id", "UUID", False, ["abc"]),
                 ColumnInfo("email", "VARCHAR", True, ["a@b.com"]),
             ], "Stores users."),
+            TableInfo("audit_log", 10, [
+                ColumnInfo("id", "INTEGER", False, ["1"]),
+            ], "Internal audit records."),
         ]
     )
     for d in ("full", "slim", "tables_only"):
-        out = get_schema_context(dummy, "show me users", detail=d)
+        out = get_schema_context(dummy, "show me users", ignored_tables=["audit_log"], detail=d)
         assert out, f"Empty output for detail={d}"
+        assert "audit_log" not in out, f"ignored table leaked for detail={d}"
         if d == "tables_only":
             assert "id" not in out, "tables_only should not include columns"
         if d == "slim":
