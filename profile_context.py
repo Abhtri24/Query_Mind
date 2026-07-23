@@ -60,8 +60,4 @@ def build_profile_context(profile: Any) -> str:
     if important_tables:
         sections.append("Important Tables:\n" + "\n".join(important_tables))
 
-    ignored_tables = _clean_string_list(get_value("ignored_tables_json", get_value("ignored_tables")))
-    if ignored_tables:
-        sections.append("Ignored Tables:\n" + "\n".join(ignored_tables))
-
     return "\n\n".join(sections)

@@ -127,6 +127,31 @@ def create_app() -> Flask:
     # ── Shared conversation history (Redis + DB fallback) ─────────────────
     from history import _get_history, _append_history, _clear_history
 
+    def get_recent_turns(session_id: str, n: int = 2) -> list:
+        # ponytail: get recent turns from Redis/DB fallback
+        from history import get_redis_history, get_db_history
+        history_data = get_redis_history(session_id)
+        if history_data is None:
+            history_data = get_db_history(session_id)
+        if not history_data:
+            return []
+        turns = []
+        i = 0
+        while i < len(history_data):
+            msg = history_data[i]
+            if msg.get("type") == "human":
+                question = msg.get("content", "")
+                explanation = ""
+                if i + 1 < len(history_data) and history_data[i + 1].get("type") == "ai":
+                    explanation = history_data[i + 1].get("content", "")
+                    i += 2
+                else:
+                    i += 1
+                turns.append({"question": question, "explanation": explanation})
+            else:
+                i += 1
+        return turns[-n:]
+
     # ── Helpers ──────────────────────────────────────────────────────────
 
     def _get_llm_for_request():
@@ -625,6 +650,28 @@ def create_app() -> Flask:
         except RuntimeError as e:
             return jsonify({"error": str(e)}), 402
 
+        # ── Session tracking ──────────────────────────────────────────
+        if "chat_session_id" not in session:
+            session["chat_session_id"] = str(uuid.uuid4())
+        flask_session_id = session["chat_session_id"]
+
+        # ── Clarification recovery ─────────────────────────────────────
+        # ponytail: check for active clarification state in Redis to rewrite query
+        from history import get_redis_client
+        r_client = get_redis_client()
+        if r_client:
+            clar_key = f"clarification:{flask_session_id}"
+            try:
+                clar_val = r_client.get(clar_key)
+                if clar_val:
+                    r_client.delete(clar_key)
+                    c_data = json.loads(clar_val)
+                    orig = c_data.get("original_question")
+                    clar_q = c_data.get("clarification_question")
+                    question = f"{orig} [clarification: {clar_q} → {question}]"
+            except Exception as e:
+                logger.warning(f"[Clarify Store] Failed to check/delete key: {e}")
+
         # ── Cache check before opening stream ─────────────────────────
         cached_result, cache_key = _query_cache_get(conn_id, question)
         if cached_result:
@@ -676,8 +723,24 @@ def create_app() -> Flask:
             try:
                 # ── Step 1: clarification ──────────────────────────────
                 yield emit({"status": "checking", "message": "Analysing question..."})
-                clarification = check_clarification_needed(llm, question, schema)
+                recent_turns = get_recent_turns(flask_session_id, n=2)
+                clarification = check_clarification_needed(llm, question, schema, recent_turns=recent_turns)
                 if clarification:
+                    # ponytail: store clarification details in Redis for follow-up question reconstruction
+                    from history import get_redis_client
+                    r_client = get_redis_client()
+                    if r_client:
+                        try:
+                            r_client.set(
+                                f"clarification:{flask_session_id}",
+                                _json.dumps({
+                                    "original_question": question,
+                                    "clarification_question": clarification
+                                }),
+                                ex=300
+                            )
+                        except Exception as e:
+                            logger.warning(f"[Clarify Store] Failed to save to Redis: {e}")
                     yield emit({"status": "clarification", "question": clarification})
                     return
 

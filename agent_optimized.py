@@ -371,7 +371,7 @@ class QueryResult:
 
 # ─── Agentic layer 1: Clarification ──────────────────────────────────────────
 
-def check_clarification_needed(llm, question: str, schema: str) -> Optional[str]:
+def check_clarification_needed(llm, question: str, schema: str, recent_turns: list = None) -> str | None:
     """
     Ask the LLM if the question is too ambiguous to answer without a follow-up.
     Returns a clarifying question string if needed, or None if the question is clear enough.
@@ -380,20 +380,37 @@ def check_clarification_needed(llm, question: str, schema: str) -> Optional[str]
     """
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    system = f"""You are a query intent analyser for a database assistant.
+    history_block = ""
+    if recent_turns:
+        lines = []
+        for turn in recent_turns[-2:]:  # last 2 turns only
+            lines.append(f"User: {turn.get('question', '')}")
+            if turn.get('explanation'):
+                lines.append(f"Assistant: {turn.get('explanation', '')}")
+        history_block = "\n".join(lines)
 
+    context_section = f"\nRECENT CONVERSATION:\n{history_block}\n" if history_block else ""
+
+    system = f"""You are a query intent analyser for a database assistant.
 Given a user's question and a database schema, decide if the question is specific
-enough to answer with SQL, or if a single clarifying question would significantly
-improve the result.
+enough to attempt SQL generation.
 
 DATABASE SCHEMA:
 {schema}
-
+{context_section}
 Rules:
-- Only flag genuinely ambiguous questions where multiple valid interpretations exist
-  and would produce very different SQL (e.g. "show me sales" — which time range? which region?).
-- Do NOT flag questions that have a reasonable default interpretation.
-- Do NOT ask for info that can be inferred from the schema.
+- DEFAULT TO ATTEMPTING. Only request clarification if the query is genuinely
+  impossible to translate into SQL without more information.
+- If a reasonable interpretation exists, return needs_clarification: false.
+  The SQL pipeline has self-healing and can recover from a wrong assumption.
+- Do NOT block on: column name ambiguity, missing sort order, unspecified limits,
+  JOIN strategy, concatenation format, or any detail the schema can answer.
+- Do NOT block on: "full name" (attempt concat), "publication year" (attempt
+  column lookup), "recent" (attempt ORDER BY + LIMIT 10), "pending" (attempt
+  status filter).
+- ONLY block when two completely different tables or time ranges are equally valid
+  and would produce irreconcilably different SQL.
+- When in doubt: attempt, don't ask.
 
 Respond ONLY with valid JSON, no prose, no markdown fences:
   {{"needs_clarification": false}}
