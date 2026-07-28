@@ -13,6 +13,13 @@ interface QueryResult {
   retries: number;
   healing_log: string[];
   response_time_s: number;
+  message_id?: number;
+  results_truncated?: boolean;
+  schema_source?: string;
+  clarification_needed?: string | null;
+  plan?: string[];
+  cached?: boolean;
+  replayed?: boolean;
 }
 
 interface ChatEntry {
@@ -123,6 +130,7 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
+    // If user sees "open app" unexpectedly, clear cookies in DevTools -> Application -> Cookies
     api.me().then(d => setUser(d.username)).catch(() => router.push("/login"));
     api.listConnections().then(setConnections).catch(() => {});
     api.budget().then(setBudget).catch(() => {});
@@ -194,11 +202,17 @@ export default function Dashboard() {
       const entries: ChatEntry[] = d.messages.map((m: Message) => ({
         question: m.question,
         loading: false,
-        result: { success: !m.error, sql: m.sql, results: null, explanation: m.answer, error: m.error, retries: m.retries || 0, healing_log: [], response_time_s: m.response_time || 0 },
+        result: { success: !m.error, sql: m.sql, results: null, explanation: m.answer, error: m.error, retries: m.retries || 0, healing_log: [], response_time_s: m.response_time || 0, results_truncated: m.results_truncated, replayed: true },
       }));
       setChat(entries);
       setTab("query");
     } catch { notify("could not load session"); }
+  };
+
+  const deleteSess = async (id: number) => {
+    await api.deleteSession(id);
+    loadHistory();
+    notify("session removed");
   };
 
   // ── Styles ────────────────────────────────────────────────────────────────
@@ -243,13 +257,14 @@ export default function Dashboard() {
     sqlLabel:  { fontSize: 9, color: "var(--ash)", marginBottom: 6, letterSpacing: ".06em", fontWeight: 700 },
     expl:      { fontSize: 13, color: "var(--body)", marginBottom: 10, lineHeight: 1.7 },
     errBox:    { background: "rgba(255,59,48,.06)", border: "1px solid rgba(255,59,48,.15)", borderRadius: 4, padding: "8px 10px", fontSize: 12, color: "#cc2d22", marginBottom: 8 },
+    askBox:    { background: "rgba(0,122,255,.06)", border: "1px solid rgba(0,122,255,.18)", borderRadius: 4, padding: "8px 10px", fontSize: 12, color: "var(--accent)", marginBottom: 8 },
     healLog:   { marginTop: 6, padding: "7px 10px", background: "var(--surface)", borderRadius: 4 },
     healLabel: { fontSize: 9, fontWeight: 700, color: "var(--mute)", letterSpacing: ".06em", marginBottom: 3 },
     healEntry: { fontSize: 10, color: "var(--mute)", padding: "2px 0", borderBottom: "1px solid var(--hairline)" },
     metaRow:   { display: "flex", alignItems: "center", gap: 8, marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--hairline)" },
-    badge:     (type: "ok" | "heal" | "err"): React.CSSProperties => ({
+    badge:     (type: "ok" | "heal" | "err" | "ghost"): React.CSSProperties => ({
       fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 4, letterSpacing: ".04em",
-      ...(type === "ok" ? { background: "rgba(48,209,88,.1)", color: "#1a7a3a", border: "1px solid rgba(48,209,88,.2)" } : type === "heal" ? { background: "rgba(255,159,10,.1)", color: "#7a4000", border: "1px solid rgba(255,159,10,.2)" } : { background: "rgba(255,59,48,.07)", color: "#cc2d22", border: "1px solid rgba(255,59,48,.18)" }),
+      ...(type === "ok" ? { background: "rgba(48,209,88,.1)", color: "#1a7a3a", border: "1px solid rgba(48,209,88,.2)" } : type === "heal" ? { background: "rgba(255,159,10,.1)", color: "#7a4000", border: "1px solid rgba(255,159,10,.2)" } : type === "ghost" ? { background: "var(--surface)", color: "var(--mute)", border: "1px solid var(--hairline)" } : { background: "rgba(255,59,48,.07)", color: "#cc2d22", border: "1px solid rgba(255,59,48,.18)" }),
     }),
     // Connect
     page:    { padding: "28px 32px", maxWidth: 600, overflowY: "auto" as const, flex: 1 },
@@ -351,6 +366,7 @@ export default function Dashboard() {
                           </div>
                         ) : entry.result ? (
                           <>
+                            {entry.result.clarification_needed && <div style={S.askBox}>[?] {entry.result.clarification_needed}</div>}
                             {entry.result.sql && (
                               <div style={S.sqlBox}>
                                 <div style={S.sqlLabel}>SQL</div>
@@ -360,6 +376,7 @@ export default function Dashboard() {
                             {entry.result.explanation && <div style={S.expl}>{entry.result.explanation}</div>}
                             {!entry.result.success && entry.result.error && <div style={S.errBox}>[-] {entry.result.error}</div>}
                             <ResultTable raw={entry.result.results} />
+                            {entry.result.replayed && !entry.result.results && <div style={S.healLog}>[raw results not stored — re-run query to see data]</div>}
                             {entry.result.healing_log && entry.result.healing_log.length > 1 && (
                               <div style={S.healLog}>
                                 <div style={S.healLabel}>SELF-HEAL LOG</div>
@@ -371,6 +388,9 @@ export default function Dashboard() {
                                 {entry.result.retries > 0 ? `[healed: ${entry.result.retries} ${entry.result.retries === 1 ? "retry" : "retries"}]` : entry.result.success ? "[ok]" : "[failed]"}
                               </span>
                               {entry.result.response_time_s > 0 && <span style={{ fontSize: 10, color: "var(--mute)" }}>{entry.result.response_time_s}s</span>}
+                              {entry.result.results_truncated && <span style={S.badge("heal")}>[truncated]</span>}
+                              {entry.result.cached && <span style={S.badge("ghost")}>[cached]</span>}
+                              {entry.result.schema_source && <span style={{ fontSize: 10, color: "var(--mute)" }}>[schema: {entry.result.schema_source}]</span>}
                               <span style={{ fontSize: 10, color: "var(--mute)" }}>{provider}</span>
                             </div>
                           </>
@@ -465,7 +485,7 @@ export default function Dashboard() {
               ) : connections.map(c => (
                 <div key={c.id} style={S.connItem}>
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 700 }}>{c.alias}</div>
+                    <div style={{ fontSize: 13, fontWeight: 700 }}>{c.alias} {c.has_memory && <span style={{ color: "var(--success)", fontSize: 9 }}>[memory ✓]</span>}</div>
                     <div style={{ fontSize: 11, color: "var(--mute)", marginTop: 2 }}>{c.dialect}</div>
                   </div>
                   <div style={{ display: "flex", gap: 6 }}>
@@ -493,6 +513,7 @@ export default function Dashboard() {
               <div key={s.id} style={S.sessRow}>
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 500 }}>session #{s.id}</div>
+                  <button style={{ ...S.btnSm("ghost"), marginTop: 6 }} onClick={() => deleteSess(s.id)}>remove</button>
                   <div style={{ fontSize: 11, color: "var(--mute)", marginTop: 2 }}>{s.message_count} {s.message_count === 1 ? "query" : "queries"} · {new Date(s.started_at).toLocaleString()}</div>
                 </div>
                 <button style={{ fontSize: 11, color: "var(--accent)", background: "none", border: "none", cursor: "pointer", fontFamily: mono }} onClick={() => replaySession(s.id)}>view →</button>
@@ -507,7 +528,6 @@ export default function Dashboard() {
         {notif.msg}
       </div>
 
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }

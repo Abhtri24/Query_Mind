@@ -523,6 +523,7 @@ def create_app() -> Flask:
             s.commit()
 
         # ── Run the agent ─────────────────────────────────────────────
+        recent_turns = get_recent_turns(flask_session_id, n=2)
         start = time.time()
         try:
             result = run_nl_query(
@@ -532,10 +533,10 @@ def create_app() -> Flask:
                 engine=engine,
                 dialect=dialect,
                 chat_history=chat_history,
+                recent_turns=recent_turns,
                 uri=uri,
                 conn_id=conn_id,
                 app_db_session=s,
-                
                 profile=profile_connection,
                 ignored_tables=profile_connection.ignored_tables_json if profile_connection else None,
 

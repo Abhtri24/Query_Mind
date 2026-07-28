@@ -10,10 +10,14 @@ async function req<T>(path: string, method = "GET", body?: unknown): Promise<T> 
     (opts.headers as Record<string, string>)["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body);
   }
-  const res = await fetch(BASE + path, opts);
-  const data = await res.json();
-  if (!res.ok && res.status !== 401) throw new Error(data.error || `HTTP ${res.status}`);
-  return data as T;
+ const res = await fetch(BASE + path, opts);
+const data = await res.json();
+
+if (!res.ok) {
+    throw new Error(data.error || `HTTP ${res.status}`);
+}
+
+return data as T;
 }
 
 export const api = {
@@ -32,8 +36,16 @@ export const api = {
   addConnection: (alias: string, uri: string) =>
     req<{ id: number; alias: string; dialect: string }>("/connections", "POST", { alias, uri }),
   listConnections: () =>
-    req<{ id: number; alias: string; dialect: string; created_at: string }[]>("/connections"),
+    req<Connection[]>("/connections").then(d => Array.isArray(d) ? d : []),
   deleteConnection: (id: number) => req(`/connections/${id}`, "DELETE"),
+  exploreConnection: (id: number, payload?: { api_key?: string; provider?: string }) =>
+    req<{ message: string; table_count: number; db_summary: string; explored_at: string }>(
+      `/connections/${id}/explore`, "POST", payload
+    ),
+  getConnectionMemory: (id: number) =>
+    req<{ exists: boolean; [key: string]: unknown }>(`/connections/${id}/memory`),
+  deleteConnectionMemory: (id: number) =>
+    req(`/connections/${id}/memory`, "DELETE"),
 
   // Query
   query: (payload: {
@@ -53,11 +65,16 @@ export const api = {
     healing_log: string[];
     response_time_s: number;
     message_id: number;
+    results_truncated: boolean;
+    schema_source: string;
+    clarification_needed: string | null;
+    plan: string[];
+    cached: boolean;
   }>("/query", "POST", payload),
 
   // Sessions
   listSessions: () =>
-    req<{ id: number; connection_id: number | null; started_at: string; message_count: number }[]>("/sessions"),
+    req<{ id: number; connection_id: number | null; started_at: string; message_count: number }[]>("/sessions").then(d => Array.isArray(d) ? d : []),
   getSession: (id: number) =>
     req<{ session_id: number; messages: Message[] }>(`/sessions/${id}`),
   deleteSession: (id: number) => req(`/sessions/${id}`, "DELETE"),
@@ -73,6 +90,7 @@ export interface Message {
   retries: number;
   response_time: number | null;
   created_at: string | null;
+  results_truncated?: boolean;
 }
 
 export interface Connection {
@@ -80,4 +98,5 @@ export interface Connection {
   alias: string;
   dialect: string;
   created_at: string;
+  has_memory?: boolean;
 }

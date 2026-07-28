@@ -14,8 +14,9 @@ Agentic pipeline (in order):
 
 Works with any database. No domain-specific assumptions.
 """
-
 from __future__ import annotations
+
+import llm_provider
 
 import re
 import logging
@@ -394,11 +395,16 @@ def check_clarification_needed(llm, question: str, schema: str, recent_turns: li
     system = f"""You are a query intent analyser for a database assistant.
 Given a user's question and a database schema, decide if the question is specific
 enough to attempt SQL generation.
+{context_section}
 
 DATABASE SCHEMA:
 {schema}
-{context_section}
 Rules:
+- COREFERENCE RESOLUTION FIRST: Before anything else, check if the question
+  contains pronouns or references ("it", "that table", "those", "them",
+  "that column", "which of those"). If so, resolve them using RECENT
+  CONVERSATION above. A resolved question is NOT ambiguous — do not ask
+  clarification for a resolvable reference.
 - DEFAULT TO ATTEMPTING. Only request clarification if the query is genuinely
   impossible to translate into SQL without more information.
 - If a reasonable interpretation exists, return needs_clarification: false.
@@ -418,6 +424,8 @@ Respond ONLY with valid JSON, no prose, no markdown fences:
   {{"needs_clarification": true, "question": "One short clarifying question."}}
 """
     try:
+        logger.debug(f"[Clarify] history_block: {repr(history_block)}")
+        logger.debug(f"[Clarify] recent_turns received: {recent_turns}")
         resp = llm.invoke([
             SystemMessage(content=system),
             HumanMessage(content=f'User asked: "{question}"'),
@@ -700,6 +708,7 @@ def run_nl_query(
     skip_clarification: bool = False,
     skip_planning: bool = False,
     ignored_tables: Optional[List[str]] = None,
+    recent_turns: list  = None,
 ) -> Dict:
     """
     Full agentic pipeline:
@@ -778,7 +787,7 @@ def run_nl_query(
     # ── Step 1: Clarification check ───────────────────────────────────────
     if not skip_clarification:
         logger.info("[Stage] Clarifier -> tables_only schema")
-        clarification = check_clarification_needed(llm, question, schema_tables_only)
+        clarification = check_clarification_needed(llm, question, schema_tables_only, recent_turns=recent_turns)
         if clarification:
             logger.info(f"[Clarify] Asking: {clarification}")
             return {

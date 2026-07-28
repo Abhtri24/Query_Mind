@@ -41,6 +41,7 @@ html, body {
 @keyframes fadeIn { from{opacity:0} to{opacity:1} }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
 @keyframes slideIn { from{opacity:0;transform:translateX(-8px)} to{opacity:1;transform:translateX(0)} }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 .anim-fade-up   { animation: fadeUp 0.45s ease forwards; }
 .anim-fade-in   { animation: fadeIn 0.3s ease forwards; }
