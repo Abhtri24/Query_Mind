@@ -349,7 +349,7 @@ def _execute_sql(engine, sql: str, dialect: str, row_limit: int, timeout_ms: int
             return val.decode("utf-8", errors="replace")
         return val
 
-    results_truncated = limit_applied or len(db_rows) > row_limit
+    results_truncated = len(db_rows) > row_limit
     result = [
         {col: serialise_value(row[i]) for i, col in enumerate(cols)}
         for row in db_rows[:row_limit]
@@ -399,12 +399,28 @@ enough to attempt SQL generation.
 
 DATABASE SCHEMA:
 {schema}
+
+MANDATORY FIRST STEP — COREFERENCE RESOLUTION:
+Before evaluating ambiguity, rewrite the question by replacing any pronouns or
+references ("it", "those", "them", "that table", "that column", "which of those",
+"the one", "that one") with the specific entities from RECENT CONVERSATION.
+
+Examples:
+  Recent: User asked which book has the most snippets. Assistant answered "Test Book has 8 snippets".
+  Question: "show me the author of that book"
+  Rewritten: "show me the author of Test Book"
+  Decision: needs_clarification: false — "that book" resolves to Test Book from the assistant's answer.
+
+  Recent: User asked about books. Assistant listed books including "Test Book" and "Shadow Slave".
+  Question: "Which of those has the most snippets?"
+  Rewritten: "Which of the books listed (Test Book, Shadow Slave) has the most snippets?"
+  Decision: needs_clarification: false — "those" resolves to the listed books.
+
+A question with resolvable references is NOT ambiguous. Never ask clarification
+for a pronoun or reference that RECENT CONVERSATION can answer.
+
 Rules:
-- COREFERENCE RESOLUTION FIRST: Before anything else, check if the question
-  contains pronouns or references ("it", "that table", "those", "them",
-  "that column", "which of those"). If so, resolve them using RECENT
-  CONVERSATION above. A resolved question is NOT ambiguous — do not ask
-  clarification for a resolvable reference.
+
 - DEFAULT TO ATTEMPTING. Only request clarification if the query is genuinely
   impossible to translate into SQL without more information.
 - If a reasonable interpretation exists, return needs_clarification: false.
@@ -565,10 +581,13 @@ def interpret_results(
     prompt = (
         f'The user asked: "{original_question}"\n\n'
         f"Here are the query results:\n{results_block}\n\n"
-        "Answer the user's question in plain English. Be concise (2-4 sentences). "
+         "Answer the user's question in plain English. Be concise (2-4 sentences). "
         "Highlight key numbers or comparisons. "
-        "If results were truncated, mention that only a sample is shown. "
-        "Never mention SQL, tables, or technical database details."
+                "If results were truncated and the question asked for a single answer (a winner, "
+        "a maximum, a minimum, a COUNT result), state the answer as fact — do NOT hedge. "
+        "If results were truncated and the question asked to list or show items, say how "
+        "many rows are shown but do NOT invent a total count you were not given. "
+        "Never mention SQL, tables, collections, or technical database details."
     )
     try:
         r = llm.invoke([HumanMessage(content=prompt)])
@@ -786,7 +805,7 @@ def run_nl_query(
 
     # ── Step 1: Clarification check ───────────────────────────────────────
     if not skip_clarification:
-        logger.info("[Stage] Clarifier -> tables_only schema")
+        logger.info("[Stage] Clarifier -> slim schema")
         clarification = check_clarification_needed(llm, question, schema_tables_only, recent_turns=recent_turns)
         if clarification:
             logger.info(f"[Clarify] Asking: {clarification}")
