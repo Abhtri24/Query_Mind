@@ -78,7 +78,7 @@ def create_app() -> Flask:
     # ── Security config ──────────────────────────────────────────────────
     app.secret_key = cfg.SECRET_KEY
     app.config["SESSION_COOKIE_HTTPONLY"] = True
-    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_SAMESITE"] = "None"
     app.config["SESSION_COOKIE_SECURE"]   = cfg.ENV == "production"
     app.config["MAX_CONTENT_LENGTH"]      = 1 * 1024 * 1024  # 1 MB
 
